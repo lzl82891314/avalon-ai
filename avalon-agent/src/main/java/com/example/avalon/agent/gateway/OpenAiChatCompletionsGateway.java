@@ -1,0 +1,361 @@
+package com.example.avalon.agent.gateway;
+
+import com.example.avalon.agent.model.AgentTurnRequest;
+import com.example.avalon.agent.model.AgentTurnResult;
+import com.example.avalon.agent.model.AuditReason;
+import com.example.avalon.agent.model.MemoryUpdate;
+import com.example.avalon.agent.model.RawCompletionMetadata;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+
+@Component
+public class OpenAiChatCompletionsGateway implements AgentGateway {
+    private static final String GATEWAY_TYPE = "openai-compatible";
+    private static final String DEFAULT_MODEL = "gpt-5.2";
+    private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(30);
+    private static final String OPTIONAL_SECTION_WARNINGS = "optionalSectionWarnings";
+
+    private final OpenAiHttpTransport transport;
+    private final Function<String, String> environmentLookup;
+    private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+
+    @Autowired
+    public OpenAiChatCompletionsGateway(OpenAiHttpTransport transport) {
+        this(transport, System::getenv);
+    }
+
+    OpenAiChatCompletionsGateway(OpenAiHttpTransport transport, Function<String, String> environmentLookup) {
+        this.transport = transport;
+        this.environmentLookup = environmentLookup;
+    }
+
+    @Override
+    public AgentTurnResult playTurn(AgentTurnRequest request) {
+        RequestSettings settings = requestSettings(request);
+        JsonNode response = transport.postChatCompletion(
+                OpenAiCompatibleSupport.endpointUri(settings.baseUrl()),
+                headers(settings),
+                requestBody(request),
+                settings.timeout()
+        );
+        return parseResponse(request, response);
+    }
+
+    private Map<String, String> headers(RequestSettings settings) {
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("Authorization", "Bearer " + settings.apiKey());
+        if (settings.organization() != null && !settings.organization().isBlank()) {
+            headers.put("OpenAI-Organization", settings.organization());
+        }
+        if (settings.project() != null && !settings.project().isBlank()) {
+            headers.put("OpenAI-Project", settings.project());
+        }
+        return headers;
+    }
+
+    private String requestBody(AgentTurnRequest request) {
+        Map<String, Object> providerOptions = OpenAiCompatibleSupport.effectiveProviderOptions(
+                request.getProvider(),
+                request.getProviderOptions()
+        );
+        ObjectNode root = objectMapper.createObjectNode();
+        root.put("model", defaultModel(request.getModelName()));
+        ArrayNode messages = root.putArray("messages");
+        messages.addObject()
+                .put("role", OpenAiCompatibleSupport.instructionRole(request.getProvider(), providerOptions))
+                .put("content", developerPrompt(request));
+        messages.addObject()
+                .put("role", "user")
+                .put("content", request.getPromptText());
+        if (request.getTemperature() != null) {
+            root.put("temperature", request.getTemperature());
+        }
+        if (request.getMaxTokens() != null) {
+            root.put("max_completion_tokens", request.getMaxTokens());
+        }
+        for (Map.Entry<String, Object> entry : providerOptions.entrySet()) {
+            if (!OpenAiCompatibleSupport.shouldForwardProviderOption(entry.getKey())) {
+                continue;
+            }
+            root.set(entry.getKey(), objectMapper.valueToTree(entry.getValue()));
+        }
+        try {
+            return objectMapper.writeValueAsString(root);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Failed to serialize OpenAI-compatible chat completion request", exception);
+        }
+    }
+
+    private AgentTurnResult parseResponse(AgentTurnRequest request, JsonNode response) {
+        JsonNode choice = response.path("choices").path(0);
+        if (choice.isMissingNode()) {
+            throw new IllegalStateException("OpenAI-compatible response did not include any choices");
+        }
+
+        JsonNode message = choice.path("message");
+        String refusal = textOrNull(message.path("refusal"));
+        if (refusal != null) {
+            throw new IllegalStateException("OpenAI-compatible completion refused the request: " + refusal);
+        }
+
+        OpenAiCompatibleMessageAnalysis analysis = OpenAiCompatibleSupport.analyzeAssistantMessage(message);
+        try {
+            JsonNode payload = OpenAiCompatibleSupport.readJson(objectMapper, analysis);
+
+            AgentTurnResult result = new AgentTurnResult();
+            result.setPublicSpeech(textOrNull(payload.path("publicSpeech")));
+            result.setPrivateThought(textOrFallback(payload.path("privateThought"), analysis.reasoningDetailsPreview()));
+            result.setActionJson(actionJson(payload));
+            OptionalSectionParse<AuditReason> auditReason = parseOptionalSection(payload, "auditReason", AuditReason.class);
+            if (auditReason.value() != null) {
+                result.setAuditReason(auditReason.value());
+            }
+            OptionalSectionParse<MemoryUpdate> memoryUpdate = parseOptionalSection(payload, "memoryUpdate", MemoryUpdate.class);
+            if (memoryUpdate.value() != null) {
+                result.setMemoryUpdate(memoryUpdate.value());
+            }
+            RawCompletionMetadata metadata = metadata(request, response, choice, analysis);
+            List<Map<String, Object>> optionalSectionWarnings = new ArrayList<>();
+            optionalSectionWarnings.addAll(auditReason.warnings());
+            optionalSectionWarnings.addAll(memoryUpdate.warnings());
+            if (!optionalSectionWarnings.isEmpty()) {
+                metadata.getAttributes().put(OPTIONAL_SECTION_WARNINGS, List.copyOf(optionalSectionWarnings));
+            }
+            result.setModelMetadata(metadata);
+            return result;
+        } catch (RuntimeException exception) {
+            throw responseException(request, response, choice, analysis, exception);
+        }
+    }
+
+    private String actionJson(JsonNode payload) {
+        JsonNode actionNode = payload.get("action");
+        if (actionNode == null || actionNode.isNull() || actionNode.isMissingNode()) {
+            throw new IllegalStateException("OpenAI-compatible response did not include an action object");
+        }
+        if (actionNode.isTextual()) {
+            return actionNode.asText();
+        }
+        try {
+            return objectMapper.writeValueAsString(actionNode);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Failed to serialize action payload from OpenAI-compatible response", exception);
+        }
+    }
+
+    private <T> T convertValue(JsonNode node, Class<T> type) {
+        try {
+            return objectMapper.treeToValue(node, type);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Failed to convert OpenAI-compatible payload section to " + type.getSimpleName(), exception);
+        }
+    }
+
+    private <T> OptionalSectionParse<T> parseOptionalSection(JsonNode payload, String fieldName, Class<T> type) {
+        JsonNode sectionNode = payload.get(fieldName);
+        if (sectionNode == null || sectionNode.isNull() || sectionNode.isMissingNode()) {
+            return OptionalSectionParse.empty();
+        }
+        if (!sectionNode.isObject()) {
+            return OptionalSectionParse.warning(optionalSectionWarning(fieldName, "expected_json_object", sectionNode));
+        }
+        try {
+            return OptionalSectionParse.value(convertValue(sectionNode, type));
+        } catch (RuntimeException exception) {
+            return OptionalSectionParse.warning(optionalSectionWarning(fieldName, "dto_conversion_failed", sectionNode));
+        }
+    }
+
+    private Map<String, Object> optionalSectionWarning(String fieldName, String reason, JsonNode sectionNode) {
+        Map<String, Object> warning = new LinkedHashMap<>();
+        warning.put("field", fieldName);
+        warning.put("reason", reason);
+        warning.put("contentPreview", OpenAiCompatibleSupport.contentPreview(sectionNode == null ? null : sectionNode.toString()));
+        return warning;
+    }
+
+    private RawCompletionMetadata metadata(AgentTurnRequest request,
+                                           JsonNode response,
+                                           JsonNode choice,
+                                           OpenAiCompatibleMessageAnalysis analysis) {
+        RawCompletionMetadata metadata = new RawCompletionMetadata();
+        metadata.setProvider(providerId(request));
+        metadata.setModelName(textOrFallback(response.path("model"), defaultModel(request.getModelName())));
+        metadata.setInputTokens(longOrNull(response.path("usage").path("prompt_tokens")));
+        metadata.setOutputTokens(longOrNull(response.path("usage").path("completion_tokens")));
+
+        Map<String, Object> attributes = new LinkedHashMap<>();
+        attributes.put("gatewayType", GATEWAY_TYPE);
+        putIfNotNull(attributes, "completionId", textOrNull(response.path("id")));
+        putIfNotNull(attributes, "finishReason", textOrNull(choice.path("finish_reason")));
+        putIfNotNull(attributes, "serviceTier", textOrNull(response.path("service_tier")));
+        putIfNotNull(attributes, "systemFingerprint", textOrNull(response.path("system_fingerprint")));
+        if (analysis != null) {
+            attributes.putAll(analysis.diagnostics());
+        }
+        metadata.setAttributes(attributes);
+        return metadata;
+    }
+
+    private RequestSettings requestSettings(AgentTurnRequest request) {
+        Map<String, Object> providerOptions = request.getProviderOptions();
+        String apiKey = OpenAiCompatibleSupport.stringOption(providerOptions, "apiKey");
+        String apiKeyEnv = OpenAiCompatibleSupport.stringOption(providerOptions, "apiKeyEnv");
+        if ((apiKey == null || apiKey.isBlank()) && apiKeyEnv != null && !apiKeyEnv.isBlank()) {
+            apiKey = environmentLookup.apply(apiKeyEnv);
+        }
+        if (apiKey == null || apiKey.isBlank()) {
+            apiKey = environmentLookup.apply("OPENAI_API_KEY");
+        }
+        if (apiKey == null || apiKey.isBlank()) {
+            throw new IllegalStateException(
+                    "OpenAI-compatible provider '" + providerId(request) + "' requires apiKey, apiKeyEnv, or OPENAI_API_KEY"
+            );
+        }
+        String baseUrl = OpenAiCompatibleSupport.stringOption(providerOptions, "baseUrl");
+        String organization = OpenAiCompatibleSupport.stringOption(providerOptions, "organization");
+        String project = OpenAiCompatibleSupport.stringOption(providerOptions, "project");
+        Duration timeout = timeout(providerOptions.get("timeoutMillis"));
+        return new RequestSettings(
+                baseUrl == null || baseUrl.isBlank() ? OpenAiCompatibleSupport.DEFAULT_BASE_URL : baseUrl,
+                apiKey,
+                organization,
+                project,
+                timeout
+        );
+    }
+
+    private Duration timeout(Object rawTimeoutMillis) {
+        if (rawTimeoutMillis instanceof Number number) {
+            return Duration.ofMillis(number.longValue());
+        }
+        if (rawTimeoutMillis instanceof String text && !text.isBlank()) {
+            return Duration.ofMillis(Long.parseLong(text));
+        }
+        return DEFAULT_TIMEOUT;
+    }
+
+    private String defaultModel(String modelName) {
+        return modelName == null || modelName.isBlank() ? DEFAULT_MODEL : modelName;
+    }
+
+    private String providerId(AgentTurnRequest request) {
+        if (request == null) {
+            return "openai";
+        }
+        return OpenAiCompatibleSupport.providerId(request.getProvider());
+    }
+
+    private OpenAiCompatibleResponseException responseException(AgentTurnRequest request,
+                                                                JsonNode response,
+                                                                JsonNode choice,
+                                                                OpenAiCompatibleMessageAnalysis analysis,
+                                                                RuntimeException exception) {
+        if (exception instanceof OpenAiCompatibleResponseException compatibleResponseException) {
+            return compatibleResponseException;
+        }
+        String finishReason = textOrNull(choice.path("finish_reason"));
+        String message = exception.getMessage() == null
+                ? OpenAiCompatibleSupport.invalidJsonMessage(analysis)
+                : exception.getMessage();
+        if (finishReason != null && !message.contains("finishReason=")) {
+            message = message + " [finishReason=" + finishReason + "]";
+        }
+        return new OpenAiCompatibleResponseException(
+                message,
+                exception,
+                providerId(request),
+                textOrFallback(response.path("model"), defaultModel(request.getModelName())),
+                finishReason,
+                analysis
+        );
+    }
+
+    private String developerPrompt(AgentTurnRequest request) {
+        StringBuilder builder = new StringBuilder("""
+                你正在控制一名阿瓦隆玩家。
+                只返回一个 JSON 对象，不要输出 Markdown，不要补充解释文字。
+                JSON 键固定为 publicSpeech、privateThought、action、auditReason、memoryUpdate。
+                publicSpeech 表示会公开说出的内容，privateThought 表示只给控制台运营者看的私有思考，两者都尽量使用中文。
+                action 必须严格匹配用户提示里允许的动作类型，并且字段完整合法。
+                所有 provider 都必须满足以下最小输出约束：
+                - 最终输出的第一个字符必须是 {，最后一个字符必须是 }
+                - publicSpeech 只写 1 到 2 句简短中文
+                - privateThought 只写一句简短中文
+                - auditReason 和 memoryUpdate 如果不需要可直接写 null 或省略
+                - 如果提供 auditReason，它必须是 JSON 对象，字段只允许 goal、reasonSummary、confidence、beliefs
+                - 如果提供 memoryUpdate，它必须是 JSON 对象，字段只允许 suspicionDelta、trustDelta、observationsToAdd、commitmentsToAdd、inferredFactsToAdd、strategyMode、lastSummary
+                - 不要输出 <think>、不要输出代码块、不要重复题面或局面摘要
+                """.strip());
+        if ("minimax".equals(providerId(request))) {
+            builder.append(System.lineSeparator())
+                    .append("""
+                            当前 provider 的兼容要求更严格：
+                            - 不要输出项目符号
+                            - 如果当前阶段只允许一个动作类型，action.actionType 必须严格等于该类型
+                            """.strip());
+        }
+        return builder.toString();
+    }
+
+    private String textOrNull(JsonNode node) {
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            return null;
+        }
+        String text = node.asText();
+        return text == null || text.isBlank() ? null : text;
+    }
+
+    private String textOrFallback(JsonNode node, String fallback) {
+        String text = textOrNull(node);
+        return text == null ? fallback : text;
+    }
+
+    private Long longOrNull(JsonNode node) {
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            return null;
+        }
+        return node.asLong();
+    }
+
+    private void putIfNotNull(Map<String, Object> payload, String key, Object value) {
+        if (value != null) {
+            payload.put(key, value);
+        }
+    }
+
+    record RequestSettings(
+            String baseUrl,
+            String apiKey,
+            String organization,
+            String project,
+            Duration timeout
+    ) {
+    }
+
+    record OptionalSectionParse<T>(T value, List<Map<String, Object>> warnings) {
+        private static <T> OptionalSectionParse<T> empty() {
+            return new OptionalSectionParse<>(null, List.of());
+        }
+
+        private static <T> OptionalSectionParse<T> value(T value) {
+            return new OptionalSectionParse<>(value, List.of());
+        }
+
+        private static <T> OptionalSectionParse<T> warning(Map<String, Object> warning) {
+            return new OptionalSectionParse<>(null, List.of(warning));
+        }
+    }
+}

@@ -1,0 +1,16 @@
+# Compound Learnings 2026-03-26
+
+- LLM provider settings should not live in per-game inline request bodies as the default operator path. They are catalog data and should be loaded or managed independently of game creation.
+- Role-based or random model selection cannot be finalized at create time in Avalon because role assignment happens at game start. The runtime has to resolve model bindings after roles are assigned.
+- Once a game resolves catalog-backed model profiles, the resolved controller config must be frozen into the persisted runtime snapshot. Recovery must not re-read the latest catalog and drift onto newer model definitions.
+- Static model profiles and managed model profiles should share one logical namespace of `modelId`. Managed entries must not silently override static entries, because that makes audits and recovery non-attributable.
+- Console UX should mirror the architecture boundary: console can choose model ids or random pools, but should not ask operators to type provider keys, model names, and transport fields inline for each game.
+- Static `model-profiles/` should reflect the intentional operator baseline, not historical test fixtures. If tests need `noop` coverage, create managed profiles or inline test data instead of repopulating source resources with unused static files.
+- OpenAI-compatible `baseUrl` values in catalog profiles must already include any required API prefix such as `/v1`. The gateway appends `/chat/completions` itself, so a bare host can silently return an HTML landing page and surface as a misleading transport failure.
+- `provider` should represent the logical upstream vendor/model family, not the transport implementation. If several vendors share one OpenAI-compatible gateway, keep distinct provider ids in catalog data and map them in routing code instead of forcing every profile to masquerade as `openai`.
+- Static model profiles must not store live provider secrets. Keep only `apiKeyEnv` indirection in source-controlled catalog files so model-profile APIs and repository history do not leak credentials.
+- Console-side "private thought" should stay on the audit path, not the public event path. The runtime can keep public events clean while the console renders operator-only reasoning from `rawModelResponse`.
+- If console playback needs human pacing, inject playback settings and a delay abstraction instead of calling `Thread.sleep` inline. That keeps the operator UX configurable and the runner unit-testable.
+- API-facing model profile responses should sanitize provider secrets such as `providerOptions.apiKey`, even if static resource files still contain them for local development.
+- OpenAI-compatible does not imply request-shape-compatible. Some vendors behind the shared gateway reject `developer` messages or other OpenAI-specific fields, so provider capabilities such as instruction role must be modeled explicitly instead of assuming one universal request shape.
+- A successful `hi` probe only proves transport, auth, and a basic completion path. Operator tooling should separately probe the structured JSON contract used by runtime actions, otherwise "model reachable" can still hide guaranteed in-game pauses.

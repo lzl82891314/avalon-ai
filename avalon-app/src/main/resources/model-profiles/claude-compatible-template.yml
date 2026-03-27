@@ -1,0 +1,14 @@
+# Template only: this provider is routed through the shared OpenAI-compatible gateway.
+# This template is pre-wired for OpenRouter. Replace modelName if you want a different Claude model.
+modelId: claude-compatible-template
+displayName: Claude via OpenRouter Template
+provider: claude
+modelName: anthropic/claude-sonnet-4.6
+temperature: 0.2
+maxTokens: 320
+enabled: false
+providerOptions:
+  apiKeyEnv: OPENROUTER_API_KEY
+  baseUrl: https://openrouter.ai/api/v1
+  response_format:
+    type: json_object

@@ -1,0 +1,14 @@
+.idea/
+.vscode/
+target/
+.mvn/
+*.iml
+*.log
+*.class
+*.jar
+*.war
+*.ear
+*.db
+*.sqlite
+.DS_Store
+

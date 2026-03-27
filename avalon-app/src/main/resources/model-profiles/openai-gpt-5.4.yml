@@ -1,0 +1,12 @@
+modelId: openai/gpt-5.4
+displayName: OpenAI GPT-5.4
+provider: openai
+modelName: openai/gpt-5.4
+temperature: 0.2
+maxTokens: 180
+enabled: true
+providerOptions:
+  apiKeyEnv: GPT_API_KEY
+  baseUrl: https://openrouter.ai/api/v1/
+  response_format:
+    type: json_object

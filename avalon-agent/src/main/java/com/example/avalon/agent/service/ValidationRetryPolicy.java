@@ -15,6 +15,7 @@ import java.util.Locale;
 public class ValidationRetryPolicy {
     private static final int DEFAULT_MAX_ATTEMPTS = 2;
     private static final int MIN_CORRECTIVE_MAX_TOKENS = 320;
+    private static final int CORRECTIVE_TOKEN_INCREMENT = 320;
 
     public ValidatedAgentTurn execute(PlayerTurnContext context,
                                       AgentTurnRequest request,
@@ -50,11 +51,14 @@ public class ValidationRetryPolicy {
         String correctivePrompt = correctivePrompt(failure, next.getAllowedActions());
         if (correctivePrompt != null) {
             next.setPromptText(appendPrompt(next.getPromptText(), correctivePrompt));
-            if (next.getMaxTokens() == null || next.getMaxTokens() < MIN_CORRECTIVE_MAX_TOKENS) {
-                next.setMaxTokens(MIN_CORRECTIVE_MAX_TOKENS);
-            }
+            next.setMaxTokens(raisedMaxTokens(next.getMaxTokens()));
         }
         return next;
+    }
+
+    private int raisedMaxTokens(Integer currentMaxTokens) {
+        int current = currentMaxTokens == null ? 0 : currentMaxTokens;
+        return Math.max(current, MIN_CORRECTIVE_MAX_TOKENS) + CORRECTIVE_TOKEN_INCREMENT;
     }
 
     private String appendPrompt(String originalPrompt, String correctivePrompt) {
@@ -71,30 +75,36 @@ public class ValidationRetryPolicy {
         String finishReason = stringValue(responseException.diagnostics().get("finishReason"));
         String contentShape = stringValue(responseException.diagnostics().get("assistantContentShape"));
         String message = failure.getMessage() == null ? "" : failure.getMessage();
-        if ("length".equalsIgnoreCase(finishReason) || "truncated_json_candidate".equals(contentShape)) {
+        if (requiresCompressionRetry(finishReason, contentShape, message)) {
             return """
-                    上一次输出疑似被截断。请重试并压缩到最小合法 JSON：
+                    上一轮输出没有满足结构化要求。请重新生成最小合法 JSON，并优先先写 action：
                     - 最终回复只能是一个 JSON 对象，首字符必须是 {，尾字符必须是 }
-                    - publicSpeech 只写 1 到 2 句简短中文
-                    - privateThought 只写一句简短中文
-                    - %s
-                    - auditReason 和 memoryUpdate 可直接写 null 或省略
-                    - 不要输出解释、Markdown、代码块或长篇分析
-                    """.formatted(actionRequirement(allowedActions)).strip();
-        }
-        if ("plain_text".equals(contentShape)
-                || "markdown_explanation".equals(contentShape)
-                || message.contains("did not include an action object")) {
-            return """
-                    上一次输出没有满足结构化要求。请重试并严格按最小 JSON 返回：
-                    - 只能输出一个 JSON 对象，不能补充解释文字
-                    - 必须包含 action 对象
-                    - publicSpeech 与 privateThought 都保持简短
-                    - %s
-                    - auditReason 和 memoryUpdate 可直接写 null 或省略
+                    - 第一层键顺序优先写 action，再写 publicSpeech、privateThought、auditReason、memoryUpdate
+                    - action 必填，且 %s
+                    - publicSpeech 只有在当前阶段需要公开发言时才提供
+                    - privateThought 可省略或写 null；如果提供，只写一句极短中文
+                    - auditReason 和 memoryUpdate 默认省略，除非确有必要
+                    - 不要输出 <think>、解释、Markdown、代码块、项目符号或长分析
                     """.formatted(actionRequirement(allowedActions)).strip();
         }
         return null;
+    }
+
+    private boolean requiresCompressionRetry(String finishReason, String contentShape, String message) {
+        if ("length".equalsIgnoreCase(finishReason)) {
+            return true;
+        }
+        if (contentShape == null || contentShape.isBlank()) {
+            return message.contains("did not include an action object");
+        }
+        return switch (contentShape) {
+            case "truncated_json_candidate",
+                 "plain_text",
+                 "markdown_explanation",
+                 "reasoning_only",
+                 "missing_content" -> true;
+            default -> message.contains("did not include an action object");
+        };
     }
 
     private String actionRequirement(List<String> allowedActions) {

@@ -195,8 +195,9 @@ public class ModelProfileProbeService {
         if (profile.temperature() != null) {
             root.put("temperature", profile.temperature());
         }
-        if (profile.maxTokens() != null) {
-            root.put("max_completion_tokens", profile.maxTokens());
+        int effectiveMaxTokens = OpenAiCompatibleSupport.effectiveMaxTokens(profile.provider(), profile.maxTokens());
+        if (effectiveMaxTokens > 0) {
+            root.put("max_completion_tokens", effectiveMaxTokens);
         }
         for (Map.Entry<String, Object> entry : providerOptions.entrySet()) {
             if (!OpenAiCompatibleSupport.shouldForwardProviderOption(entry.getKey())) {
@@ -210,18 +211,20 @@ public class ModelProfileProbeService {
     private String structuredInstruction(String provider) {
         StringBuilder builder = new StringBuilder("""
                 你正在控制一名阿瓦隆玩家。
-                只返回一个 JSON 对象，不要输出 Markdown，不要补充解释文字。
-                JSON 键固定为 publicSpeech、privateThought、action、auditReason、memoryUpdate。
-                publicSpeech 和 privateThought 都尽量使用中文。
-                action 必须是合法的结构化动作 JSON。
+                只返回一个 JSON 对象，不要输出 Markdown、代码块、<think>、项目符号或解释文字。
+                最终输出的第一个字符必须是 {，最后一个字符必须是 }。
+                优先返回最小合法 JSON，并把第一层键按 action、publicSpeech、privateThought、auditReason、memoryUpdate 的顺序写出。
+                action 必填，且必须是合法的结构化动作 JSON。
+                publicSpeech 只在需要公开发言时才提供。
+                privateThought 可以省略或写 null；如果提供，只写一句极短中文。
+                auditReason 和 memoryUpdate 默认省略；如果提供，必须是 JSON 对象。
                 """.strip());
         if ("minimax".equals(OpenAiCompatibleSupport.providerId(provider))) {
             builder.append(System.lineSeparator())
                     .append("""
                             兼容要求：
-                            - 最终输出的第一个字符必须是 {，最后一个字符必须是 }
-                            - 不要输出 <think>、不要输出代码块、不要输出项目符号、不要解释规则
-                            - privateThought 只写一句简短中文
+                            - 不要输出项目符号
+                            - 不要解释规则
                             """.strip());
         }
         return builder.toString();
@@ -230,15 +233,16 @@ public class ModelProfileProbeService {
     private String structuredUserPrompt(String provider) {
         StringBuilder builder = new StringBuilder("""
                 当前阶段只允许 PUBLIC_SPEECH。
-                请返回一个合法动作，其中 action.actionType 必须为 PUBLIC_SPEECH，
+                请返回一个最小合法动作，其中 action.actionType 必须为 PUBLIC_SPEECH，
                 action.speechText 可以是一句简短中文发言。
+                除 action 外，其他字段不是必须；如果提供，请保持极短。
                 """.strip());
         if ("minimax".equals(OpenAiCompatibleSupport.providerId(provider))) {
             builder.append(System.lineSeparator())
                     .append("""
                             你的最终回复只能是一个 JSON 对象。
                             合法示例：
-                            {"publicSpeech":"我先说一句公开信息。","privateThought":"先做一轮观察。","action":{"actionType":"PUBLIC_SPEECH","speechText":"我先说一句公开信息。"},"auditReason":{"goal":"生成合法公开发言","reasonSummary":["当前阶段只允许公开发言"],"confidence":0.72},"memoryUpdate":null}
+                            {"action":{"actionType":"PUBLIC_SPEECH","speechText":"我先说一句公开信息。"},"publicSpeech":"我先说一句公开信息。","privateThought":"先做一轮观察。"}
                             """.strip());
         }
         return builder.toString();

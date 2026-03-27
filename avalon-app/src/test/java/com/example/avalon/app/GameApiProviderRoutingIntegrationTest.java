@@ -83,6 +83,7 @@ class GameApiProviderRoutingIntegrationTest {
         JsonNode requestBody = objectMapper.readTree(bodyCaptor.getValue());
         assertThat(requestBody.path("messages").get(0).path("role").asText()).isEqualTo("system");
         assertThat(requestBody.path("reasoning_split").asBoolean()).isTrue();
+        assertThat(requestBody.path("max_completion_tokens").asInt()).isEqualTo(640);
 
         String auditResponseBody = mockMvc.perform(get("/games/{gameId}/audit", gameId))
                 .andExpect(status().isOk())
@@ -94,6 +95,47 @@ class GameApiProviderRoutingIntegrationTest {
         JsonNode auditEntries = objectMapper.readTree(auditResponseBody);
         assertThat(auditEntries.get(0).path("rawModelResponseJson").asText()).contains("\"provider\":\"minimax\"");
         assertThat(auditEntries.get(0).path("rawModelResponseJson").asText()).contains("\"gatewayType\":\"openai-compatible\"");
+    }
+
+    @Test
+    void compatibleProviderShouldRetryWithRaisedTokenBudgetAfterTruncatedJsonFailure() throws Exception {
+        reset(transport);
+        when(transport.postChatCompletion(any(), anyMap(), anyString(), any(Duration.class)))
+                .thenReturn(truncatedJsonResponse())
+                .thenReturn(publicSpeechResponse("我先给出一段压缩后的测试发言。"));
+
+        String modelId = createManagedCompatibleProfile(
+                "managed-minimax-retry",
+                "minimax",
+                "minimax-m2.7",
+                320,
+                """
+                        {
+                          "apiKey": "test-key",
+                          "baseUrl": "https://mock.minimax.test/v1",
+                          "response_format": {"type": "json_object"}
+                        }
+                        """
+        );
+        String gameId = createGame(roleBindingSelection(modelId));
+
+        mockMvc.perform(post("/games/{gameId}/start", gameId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RUNNING"));
+
+        mockMvc.perform(post("/games/{gameId}/step", gameId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RUNNING"));
+
+        org.mockito.ArgumentCaptor<String> bodyCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(transport, times(2)).postChatCompletion(any(), anyMap(), bodyCaptor.capture(), any(Duration.class));
+        List<String> bodies = bodyCaptor.getAllValues();
+        JsonNode firstRequestBody = objectMapper.readTree(bodies.get(0));
+        JsonNode secondRequestBody = objectMapper.readTree(bodies.get(1));
+
+        assertThat(firstRequestBody.path("max_completion_tokens").asInt()).isEqualTo(640);
+        assertThat(secondRequestBody.path("max_completion_tokens").asInt()).isEqualTo(640);
+        assertThat(secondRequestBody.path("messages").get(1).path("content").asText()).contains("优先先写 action");
     }
 
     @Test
@@ -171,12 +213,12 @@ class GameApiProviderRoutingIntegrationTest {
 
     private JsonNode publicSpeechResponse(String speechText) throws Exception {
         String payload = objectMapper.writeValueAsString(Map.of(
-                "publicSpeech", speechText,
-                "privateThought", "这是一次 provider 路由测试。",
                 "action", Map.of(
                         "actionType", "PUBLIC_SPEECH",
                         "speechText", speechText
                 ),
+                "publicSpeech", speechText,
+                "privateThought", "这是一次 provider 路由测试。",
                 "auditReason", Map.of(
                         "goal", "生成一个合法的 PUBLIC_SPEECH 动作",
                         "reasonSummary", List.of("测试共享 OpenAI-compatible provider 路由"),
@@ -218,6 +260,24 @@ class GameApiProviderRoutingIntegrationTest {
                 """.formatted(objectMapper.writeValueAsString(content)));
     }
 
+    private JsonNode truncatedJsonResponse() throws Exception {
+        return objectMapper.readTree("""
+                {
+                  "id": "chatcmpl-truncated",
+                  "model": "minimax-m2.7",
+                  "usage": {"prompt_tokens": 12, "completion_tokens": 320},
+                  "choices": [
+                    {
+                      "finish_reason": "length",
+                      "message": {
+                        "content": "{\\"publicSpeech\\":\\"我是1号，先给个保守思路。\\",\\"privateThought\\":\\"先做低风险验证\\",\\"action\\":"
+                      }
+                    }
+                  ]
+                }
+                """);
+    }
+
     private JsonNode reasoningOnlyResponse(String reasoningText) throws Exception {
         return objectMapper.readTree("""
                 {
@@ -246,6 +306,14 @@ class GameApiProviderRoutingIntegrationTest {
                                                   String provider,
                                                   String modelName,
                                                   String providerOptionsJson) throws Exception {
+        return createManagedCompatibleProfile(modelId, provider, modelName, 180, providerOptionsJson);
+    }
+
+    private String createManagedCompatibleProfile(String modelId,
+                                                  String provider,
+                                                  String modelName,
+                                                  int maxTokens,
+                                                  String providerOptionsJson) throws Exception {
         String responseBody = mockMvc.perform(post("/model-profiles")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -255,11 +323,11 @@ class GameApiProviderRoutingIntegrationTest {
                                   "provider": "%s",
                                   "modelName": "%s",
                                   "temperature": 0.2,
-                                  "maxTokens": 180,
+                                  "maxTokens": %s,
                                   "providerOptions": %s,
                                   "enabled": true
                                 }
-                                """.formatted(modelId, modelId, provider, modelName, providerOptionsJson)))
+                                """.formatted(modelId, modelId, provider, modelName, maxTokens, providerOptionsJson)))
                 .andExpect(status().isOk())
                 .andReturn()
                 .getResponse()

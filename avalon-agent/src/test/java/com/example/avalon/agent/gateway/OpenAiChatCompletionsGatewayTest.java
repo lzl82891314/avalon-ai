@@ -64,7 +64,7 @@ class OpenAiChatCompletionsGatewayTest {
         assertEquals(Duration.ofMillis(1500), timeoutRef.get());
         assertEquals("gpt-5.2", requestBody.path("model").asText());
         assertEquals(0.2, requestBody.path("temperature").asDouble());
-        assertEquals(180, requestBody.path("max_completion_tokens").asInt());
+        assertEquals(640, requestBody.path("max_completion_tokens").asInt());
         assertEquals("json_object", requestBody.path("response_format").path("type").asText());
         assertEquals(7, requestBody.path("seed").asInt());
         assertEquals(true, requestBody.path("reasoning_split").asBoolean());

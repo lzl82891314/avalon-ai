@@ -281,7 +281,7 @@ class GameApiIntegrationTest {
         assertThat(openAiProfile.path("editable").asBoolean()).isFalse();
         assertThat(openAiProfile.path("source").asText()).isEqualTo("STATIC");
         assertThat(openAiProfile.path("provider").asText()).isEqualTo("openai");
-        assertThat(openAiProfile.path("providerOptions").path("baseUrl").asText()).isEqualTo("https://openrouter.ai/api/v1/");
+        assertThat(openAiProfile.path("providerOptions").path("baseUrl").asText()).isEqualTo("https://gcapi.cn/v1");
         assertThat(openAiProfile.path("providerOptions").has("apiKey")).isFalse();
 
         mockMvc.perform(get("/model-profiles/{modelId}", "minimax-m2.7"))

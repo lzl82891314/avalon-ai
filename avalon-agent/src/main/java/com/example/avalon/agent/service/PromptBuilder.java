@@ -22,17 +22,15 @@ public class PromptBuilder {
                 记忆：%s
                 公开局面：%s
                 输出 schema 版本：%s
-                请把“公开发言”放到 publicSpeech，把“仅供控制台展示的私有思考”放到 privateThought。
-                publicSpeech 和 privateThought 都优先使用中文。
-                action 必须是当前阶段合法的结构化动作 JSON。
-                所有 provider 都必须满足以下最小输出约束：
-                - 最终回复只能是一个 JSON 对象，首字符必须是 {，尾字符必须是 }
-                - publicSpeech 只写 1 到 2 句简短中文，不要复述整段局面
-                - privateThought 只写一句简短中文，不要写成长篇分析
-                - auditReason 和 memoryUpdate 如果不需要可直接写 null 或省略
-                - 如果提供 auditReason，它必须是 JSON 对象，字段只允许 goal、reasonSummary、confidence、beliefs
-                - 如果提供 memoryUpdate，它必须是 JSON 对象，字段只允许 suspicionDelta、trustDelta、observationsToAdd、commitmentsToAdd、inferredFactsToAdd、strategyMode、lastSummary
-                - 不要输出 Markdown、代码块、<think> 或解释文字
+                只返回一个 JSON 对象，不要输出 Markdown、代码块、<think>、项目符号或任何解释文字。
+                最终输出的第一个字符必须是 {，最后一个字符必须是 }。
+                优先返回最小合法 JSON，并把第一层键按 action、publicSpeech、privateThought、auditReason、memoryUpdate 的顺序写出。
+                action 必填，且必须是当前阶段合法的结构化动作 JSON。
+                publicSpeech 只有在当前阶段需要公开发言时才提供；如果提供，只写 1 到 2 句简短中文。
+                privateThought 可以省略或写 null；如果提供，只写一句极短中文，不要长篇分析。
+                auditReason 和 memoryUpdate 默认省略；只有在确有必要时才提供。
+                如果提供 auditReason，它必须是 JSON 对象，字段只允许 goal、reasonSummary、confidence、beliefs。
+                如果提供 memoryUpdate，它必须是 JSON 对象，字段只允许 suspicionDelta、trustDelta、observationsToAdd、commitmentsToAdd、inferredFactsToAdd、strategyMode、lastSummary。
                 """.formatted(
                 request.getGameId(),
                 request.getRoundNo(),
@@ -52,9 +50,9 @@ public class PromptBuilder {
                 .append(System.lineSeparator())
                 .append(exampleJson(request.getAllowedActions()))
                 .append(System.lineSeparator())
-                .append("如果需要提供 memoryUpdate，最小合法示例：")
+                .append("如果确实需要提供 memoryUpdate，最小合法示例：")
                 .append(System.lineSeparator())
-                .append("{\"memoryUpdate\":{\"observationsToAdd\":[\"记录一条新观察\"],\"strategyMode\":\"BALANCED\",\"lastSummary\":\"保持低风险验证。\"}}");
+                .append("{\"action\":{\"actionType\":\"PUBLIC_SPEECH\",\"speechText\":\"我先给出公开看法。\"},\"publicSpeech\":\"我先给出公开看法。\",\"memoryUpdate\":{\"observationsToAdd\":[\"记录一条新观察\"],\"strategyMode\":\"BALANCED\",\"lastSummary\":\"保持低风险验证。\"}}");
         if ("minimax".equals(OpenAiCompatibleSupport.providerId(request.getProvider()))) {
             builder.append(System.lineSeparator())
                     .append("""
@@ -72,19 +70,19 @@ public class PromptBuilder {
                 : allowedActions.get(0);
         return switch (primaryAction) {
             case "TEAM_PROPOSAL" -> """
-                    {"publicSpeech":"我先提一个可验证的队伍。","privateThought":"先做一轮低风险验证。","action":{"actionType":"TEAM_PROPOSAL","selectedPlayerIds":["P1","P2"]},"auditReason":null,"memoryUpdate":null}
+                    {"action":{"actionType":"TEAM_PROPOSAL","selectedPlayerIds":["P1","P2"]},"publicSpeech":"我先提一个可验证的队伍。","privateThought":"先做一轮低风险验证。"}
                     """.strip();
             case "TEAM_VOTE" -> """
-                    {"publicSpeech":"我暂时支持这支队伍。","privateThought":"先看这一轮投票。","action":{"actionType":"TEAM_VOTE","vote":"APPROVE"},"auditReason":null,"memoryUpdate":null}
+                    {"action":{"actionType":"TEAM_VOTE","vote":"APPROVE"},"publicSpeech":"我暂时支持这支队伍。","privateThought":"先看这一轮投票。"}
                     """.strip();
             case "MISSION_ACTION" -> """
-                    {"publicSpeech":null,"privateThought":"先执行当前任务动作。","action":{"actionType":"MISSION_ACTION","choice":"SUCCESS"},"auditReason":null,"memoryUpdate":null}
+                    {"action":{"actionType":"MISSION_ACTION","choice":"SUCCESS"},"privateThought":"先执行当前任务动作。"}
                     """.strip();
             case "ASSASSINATION" -> """
-                    {"publicSpeech":"我现在给出刺杀目标。","privateThought":"优先锁定最像梅林的玩家。","action":{"actionType":"ASSASSINATION","targetPlayerId":"P1"},"auditReason":null,"memoryUpdate":null}
+                    {"action":{"actionType":"ASSASSINATION","targetPlayerId":"P1"},"publicSpeech":"我现在给出刺杀目标。","privateThought":"优先锁定最像梅林的玩家。"}
                     """.strip();
             default -> """
-                    {"publicSpeech":"我先给出公开看法。","privateThought":"先收集一轮信息。","action":{"actionType":"PUBLIC_SPEECH","speechText":"我先给出公开看法。"},"auditReason":null,"memoryUpdate":null}
+                    {"action":{"actionType":"PUBLIC_SPEECH","speechText":"我先给出公开看法。"},"publicSpeech":"我先给出公开看法。","privateThought":"先收集一轮信息。"}
                     """.strip();
         };
     }

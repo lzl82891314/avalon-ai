@@ -16,6 +16,8 @@ public final class OpenAiCompatibleSupport {
     public static final String DEFAULT_BASE_URL = "https://api.openai.com/v1";
     private static final Set<String> SYSTEM_INSTRUCTION_PROVIDERS = Set.of("minimax");
     private static final Set<String> REASONING_SPLIT_PROVIDERS = Set.of("minimax");
+    private static final Set<String> HIGH_TOKEN_BUDGET_PROVIDERS = Set.of("minimax", "glm", "claude", "qwen");
+    private static final int MIN_STRUCTURED_OUTPUT_MAX_TOKENS = 640;
     private static final Set<String> LOCAL_OPTION_KEYS = Set.of(
             "apiKey",
             "apiKeyEnv",
@@ -77,6 +79,19 @@ public final class OpenAiCompatibleSupport {
             effective.put("reasoning_split", true);
         }
         return effective;
+    }
+
+    public static int effectiveMaxTokens(String provider, Integer configuredMaxTokens) {
+        if (configuredMaxTokens == null) {
+            return HIGH_TOKEN_BUDGET_PROVIDERS.contains(providerId(provider))
+                    ? MIN_STRUCTURED_OUTPUT_MAX_TOKENS
+                    : 0;
+        }
+        if (HIGH_TOKEN_BUDGET_PROVIDERS.contains(providerId(provider))
+                && configuredMaxTokens < MIN_STRUCTURED_OUTPUT_MAX_TOKENS) {
+            return MIN_STRUCTURED_OUTPUT_MAX_TOKENS;
+        }
+        return configuredMaxTokens;
     }
 
     public static OpenAiCompatibleMessageAnalysis analyzeAssistantMessage(JsonNode message) {

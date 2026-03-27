@@ -207,15 +207,17 @@ class LlmPlayerControllerTest {
                         )
                 );
             }
-            assertEquals(320, request.getMaxTokens());
-            assertTrue(request.getPromptText().contains("上一次输出疑似被截断"));
+            assertEquals(640, request.getMaxTokens());
+            assertTrue(request.getPromptText().contains("优先先写 action"));
             AgentTurnResult result = new AgentTurnResult();
             result.setActionJson("{\"actionType\":\"TEAM_VOTE\",\"vote\":\"APPROVE\"}");
             return result;
         };
         PlayerAgentConfig config = new PlayerAgentConfig();
         config.setOutputSchemaVersion("v1");
-        config.setModelProfile(new com.example.avalon.agent.model.ModelProfile());
+        com.example.avalon.agent.model.ModelProfile modelProfile = new com.example.avalon.agent.model.ModelProfile();
+        modelProfile.setMaxTokens(320);
+        config.setModelProfile(modelProfile);
         LlmPlayerController controller = new LlmPlayerController(
                 agentGateway,
                 new AgentTurnRequestFactory(),
@@ -229,8 +231,8 @@ class LlmPlayerControllerTest {
 
         assertEquals(2, result.rawMetadata().get("attempts"));
         Map<String, Object> inputContext = rawMap(result.rawMetadata().get("inputContext"));
-        assertEquals(320, inputContext.get("maxTokens"));
-        assertTrue(String.valueOf(inputContext.get("promptText")).contains("上一次输出疑似被截断"));
+        assertEquals(640, inputContext.get("maxTokens"));
+        assertTrue(String.valueOf(inputContext.get("promptText")).contains("优先先写 action"));
     }
 
     @SuppressWarnings("unchecked")

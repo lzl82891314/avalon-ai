@@ -82,8 +82,9 @@ public class OpenAiChatCompletionsGateway implements AgentGateway {
         if (request.getTemperature() != null) {
             root.put("temperature", request.getTemperature());
         }
-        if (request.getMaxTokens() != null) {
-            root.put("max_completion_tokens", request.getMaxTokens());
+        int effectiveMaxTokens = OpenAiCompatibleSupport.effectiveMaxTokens(request.getProvider(), request.getMaxTokens());
+        if (effectiveMaxTokens > 0) {
+            root.put("max_completion_tokens", effectiveMaxTokens);
         }
         for (Map.Entry<String, Object> entry : providerOptions.entrySet()) {
             if (!OpenAiCompatibleSupport.shouldForwardProviderOption(entry.getKey())) {
@@ -286,18 +287,15 @@ public class OpenAiChatCompletionsGateway implements AgentGateway {
     private String developerPrompt(AgentTurnRequest request) {
         StringBuilder builder = new StringBuilder("""
                 你正在控制一名阿瓦隆玩家。
-                只返回一个 JSON 对象，不要输出 Markdown，不要补充解释文字。
-                JSON 键固定为 publicSpeech、privateThought、action、auditReason、memoryUpdate。
-                publicSpeech 表示会公开说出的内容，privateThought 表示只给控制台运营者看的私有思考，两者都尽量使用中文。
-                action 必须严格匹配用户提示里允许的动作类型，并且字段完整合法。
-                所有 provider 都必须满足以下最小输出约束：
-                - 最终输出的第一个字符必须是 {，最后一个字符必须是 }
-                - publicSpeech 只写 1 到 2 句简短中文
-                - privateThought 只写一句简短中文
-                - auditReason 和 memoryUpdate 如果不需要可直接写 null 或省略
-                - 如果提供 auditReason，它必须是 JSON 对象，字段只允许 goal、reasonSummary、confidence、beliefs
-                - 如果提供 memoryUpdate，它必须是 JSON 对象，字段只允许 suspicionDelta、trustDelta、observationsToAdd、commitmentsToAdd、inferredFactsToAdd、strategyMode、lastSummary
-                - 不要输出 <think>、不要输出代码块、不要重复题面或局面摘要
+                只返回一个 JSON 对象，不要输出 Markdown、代码块、<think>、项目符号或解释文字。
+                最终输出的第一个字符必须是 {，最后一个字符必须是 }。
+                优先返回最小合法 JSON，并把第一层键按 action、publicSpeech、privateThought、auditReason、memoryUpdate 的顺序写出。
+                action 必填，且必须严格匹配用户提示里允许的动作类型，并保证字段完整合法。
+                publicSpeech 只在当前阶段需要公开发言时才提供；如果提供，只写 1 到 2 句简短中文。
+                privateThought 可以省略或写 null；如果提供，只写一句极短中文。
+                auditReason 和 memoryUpdate 默认省略；只有在确有必要时才提供。
+                如果提供 auditReason，它必须是 JSON 对象，字段只允许 goal、reasonSummary、confidence、beliefs。
+                如果提供 memoryUpdate，它必须是 JSON 对象，字段只允许 suspicionDelta、trustDelta、observationsToAdd、commitmentsToAdd、inferredFactsToAdd、strategyMode、lastSummary。
                 """.strip());
         if ("minimax".equals(providerId(request))) {
             builder.append(System.lineSeparator())

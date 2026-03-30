@@ -7,7 +7,6 @@ temperature: 0.2
 maxTokens: 320
 enabled: true
 providerOptions:
-  apiKey: sk-DHfMbEGNIY1HVIDG0viBphkkoAbR854c2Pae80A9vQ7D5SlQ
   baseUrl: https://gcapi.cn/v1
   instructionRole: system
   response_format:

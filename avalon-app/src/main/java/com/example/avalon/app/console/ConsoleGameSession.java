@@ -16,6 +16,7 @@ final class ConsoleGameSession {
     private long lastPrintedAuditEventSeqNo;
     private final Map<String, SeatDescriptor> seatsByPlayerId = new LinkedHashMap<>();
     private final Map<Integer, SeatDescriptor> seatsBySeatNo = new LinkedHashMap<>();
+    private Long seed;
     private String llmSelectionSummary;
     private final List<String> llmSelectionDetails = new ArrayList<>();
 
@@ -35,6 +36,10 @@ final class ConsoleGameSession {
         return lastPrintedAuditEventSeqNo;
     }
 
+    Long seed() {
+        return seed;
+    }
+
     void updateLastPrintedEventSeqNo(long seqNo) {
         lastPrintedEventSeqNo = Math.max(lastPrintedEventSeqNo, seqNo);
     }
@@ -49,6 +54,7 @@ final class ConsoleGameSession {
         this.lastPrintedAuditEventSeqNo = 0L;
         this.seatsByPlayerId.clear();
         this.seatsBySeatNo.clear();
+        this.seed = request.getSeed();
         this.llmSelectionSummary = null;
         this.llmSelectionDetails.clear();
 
@@ -90,6 +96,7 @@ final class ConsoleGameSession {
         this.lastPrintedAuditEventSeqNo = 0L;
         this.seatsByPlayerId.clear();
         this.seatsBySeatNo.clear();
+        this.seed = null;
         this.llmSelectionSummary = null;
         this.llmSelectionDetails.clear();
     }

@@ -48,6 +48,7 @@ public class PersistentGameApplicationService implements GameApplicationService 
     private final ReplayQueryService replayQueryService;
     private final TurnContextBuilder turnContextBuilder;
     private final ModelProfileCatalogService modelProfileCatalogService;
+    private final SeedGenerator seedGenerator;
     private final ObjectMapper objectMapper;
 
     public PersistentGameApplicationService(
@@ -58,7 +59,8 @@ public class PersistentGameApplicationService implements GameApplicationService 
             RecoveryService recoveryService,
             ReplayQueryService replayQueryService,
             TurnContextBuilder turnContextBuilder,
-            ModelProfileCatalogService modelProfileCatalogService
+            ModelProfileCatalogService modelProfileCatalogService,
+            SeedGenerator seedGenerator
     ) {
         this.configRegistry = configRegistry;
         this.gameOrchestrator = gameOrchestrator;
@@ -68,6 +70,7 @@ public class PersistentGameApplicationService implements GameApplicationService 
         this.replayQueryService = replayQueryService;
         this.turnContextBuilder = turnContextBuilder;
         this.modelProfileCatalogService = modelProfileCatalogService;
+        this.seedGenerator = seedGenerator;
         this.objectMapper = new ObjectMapper().findAndRegisterModules();
     }
 
@@ -164,6 +167,7 @@ public class PersistentGameApplicationService implements GameApplicationService 
 
     private GameSetup toGameSetup(String gameId, CreateGameRequest request) {
         SetupTemplate setupTemplate = configRegistry.requireSetupTemplate(request.getSetupTemplateId());
+        long effectiveSeed = Optional.ofNullable(request.getSeed()).orElseGet(seedGenerator::nextSeed);
         List<PlayerRegistration> players = new ArrayList<>();
         int llmPlayerCount = 0;
         int playerIndex = 1;
@@ -187,7 +191,7 @@ public class PersistentGameApplicationService implements GameApplicationService 
                 configRegistry.requireRuleSet(request.getRuleSetId()),
                 request.getSetupTemplateId(),
                 setupTemplate,
-                Optional.ofNullable(request.getSeed()).orElse(1L),
+                effectiveSeed,
                 roleDefinitionsFor(setupTemplate),
                 players,
                 llmSelectionConfig

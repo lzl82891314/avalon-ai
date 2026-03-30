@@ -8,6 +8,7 @@ import com.example.avalon.agent.service.PromptBuilder;
 import com.example.avalon.agent.service.ResponseParser;
 import com.example.avalon.agent.service.ValidationRetryPolicy;
 import com.example.avalon.api.service.LlmSelectionResolutionService;
+import com.example.avalon.api.service.SeedGenerator;
 import com.example.avalon.config.io.YamlConfigLoader;
 import com.example.avalon.config.model.AvalonConfigRegistry;
 import com.example.avalon.config.service.SetupValidationService;
@@ -35,6 +36,7 @@ import org.springframework.context.annotation.Configuration;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.ThreadLocalRandom;
 
 @Configuration
 public class AvalonApplicationConfig {
@@ -123,6 +125,11 @@ public class AvalonApplicationConfig {
     @Bean
     ReplayQueryService replayQueryService(GameEventStore gameEventStore, AuditRecordStore auditRecordStore) {
         return new ReplayQueryService(gameEventStore, auditRecordStore);
+    }
+
+    @Bean
+    SeedGenerator seedGenerator() {
+        return () -> ThreadLocalRandom.current().nextLong(1L, Long.MAX_VALUE);
     }
 
     @Bean

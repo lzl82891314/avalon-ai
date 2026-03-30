@@ -68,6 +68,9 @@ public class ConsoleTranscriptPrinter {
         }
         StringBuilder builder = new StringBuilder();
         builder.append("当前配置");
+        builder.append(System.lineSeparator())
+                .append("  随机种子=")
+                .append(session.seed() == null ? "-" : session.seed());
         for (ConsoleGameSession.SeatDescriptor seat : session.seats()) {
             builder.append(System.lineSeparator())
                     .append("  ")

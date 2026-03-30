@@ -11,6 +11,7 @@ import com.example.avalon.api.dto.PlayerPrivateViewResponse;
 import com.example.avalon.api.service.GameApplicationService;
 import com.example.avalon.api.service.ModelProfileCatalogService;
 import com.example.avalon.api.service.ModelProfileProbeService;
+import com.example.avalon.api.service.SeedGenerator;
 import com.example.avalon.config.model.AvalonConfigRegistry;
 import com.example.avalon.core.setup.model.SetupTemplate;
 import org.junit.jupiter.api.Test;
@@ -33,6 +34,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AvalonConsoleRunnerTest {
+    private static final long GENERATED_SEED = 246810L;
     private static final SetupTemplate CLASSIC_TEMPLATE = new SetupTemplate(
             "classic-5p-v1",
             5,
@@ -56,6 +58,7 @@ class AvalonConsoleRunnerTest {
                     assertThat(player.getControllerType()).isEqualTo("LLM");
                     assertThat(player.getAgentConfig()).isNotNull();
                 });
+        assertThat(request.getSeed()).isEqualTo(GENERATED_SEED);
         assertThat(request.getLlmSelection()).isNotNull();
         assertThat(request.getLlmSelection().getMode()).isEqualTo("ROLE_BINDING");
         assertThat(request.getLlmSelection().getRoleBindings().values())
@@ -125,6 +128,7 @@ class AvalonConsoleRunnerTest {
         List<Long> delays = new ArrayList<>();
         ConsolePlaybackSettings playbackSettings = new ConsolePlaybackSettings(true, 5L, 7L);
         ConsolePlaybackDelayer playbackDelayer = delays::add;
+        SeedGenerator seedGenerator = () -> GENERATED_SEED;
         ConfigurableApplicationContext applicationContext = mock(ConfigurableApplicationContext.class);
 
         AvalonConsoleRunner runner = new AvalonConsoleRunner(
@@ -132,6 +136,7 @@ class AvalonConsoleRunnerTest {
                 modelProfileCatalogService,
                 modelProfileProbeService,
                 configRegistry,
+                seedGenerator,
                 printer,
                 decisionReportBuilder,
                 playbackSettings,
@@ -175,6 +180,7 @@ class AvalonConsoleRunnerTest {
         ConsoleDecisionReportBuilder decisionReportBuilder = mock(ConsoleDecisionReportBuilder.class);
         ConsolePlaybackSettings playbackSettings = new ConsolePlaybackSettings(true, 1L, 1L);
         ConsolePlaybackDelayer playbackDelayer = millis -> { };
+        SeedGenerator seedGenerator = () -> GENERATED_SEED;
         ConfigurableApplicationContext applicationContext = mock(ConfigurableApplicationContext.class);
 
         AvalonConsoleRunner runner = new AvalonConsoleRunner(
@@ -182,6 +188,7 @@ class AvalonConsoleRunnerTest {
                 modelProfileCatalogService,
                 modelProfileProbeService,
                 configRegistry,
+                seedGenerator,
                 printer,
                 decisionReportBuilder,
                 playbackSettings,
@@ -212,6 +219,7 @@ class AvalonConsoleRunnerTest {
         ConsoleDecisionReportBuilder decisionReportBuilder = new ConsoleDecisionReportBuilder();
         ConsolePlaybackSettings playbackSettings = new ConsolePlaybackSettings(false, 1L, 1L);
         ConsolePlaybackDelayer playbackDelayer = millis -> { };
+        SeedGenerator seedGenerator = () -> GENERATED_SEED;
         ConfigurableApplicationContext applicationContext = mock(ConfigurableApplicationContext.class);
 
         AvalonConsoleRunner runner = new AvalonConsoleRunner(
@@ -219,6 +227,7 @@ class AvalonConsoleRunnerTest {
                 modelProfileCatalogService,
                 modelProfileProbeService,
                 configRegistry,
+                seedGenerator,
                 printer,
                 decisionReportBuilder,
                 playbackSettings,
@@ -278,6 +287,7 @@ class AvalonConsoleRunnerTest {
         ConsoleDecisionReportBuilder decisionReportBuilder = mock(ConsoleDecisionReportBuilder.class);
         ConsolePlaybackSettings playbackSettings = new ConsolePlaybackSettings(true, 1L, 1L);
         ConsolePlaybackDelayer playbackDelayer = millis -> { };
+        SeedGenerator seedGenerator = () -> GENERATED_SEED;
         ConfigurableApplicationContext applicationContext = mock(ConfigurableApplicationContext.class);
 
         when(modelProfileCatalogService.listAll()).thenReturn(profiles);
@@ -288,6 +298,7 @@ class AvalonConsoleRunnerTest {
                 modelProfileCatalogService,
                 modelProfileProbeService,
                 configRegistry,
+                seedGenerator,
                 printer,
                 decisionReportBuilder,
                 playbackSettings,

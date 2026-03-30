@@ -13,6 +13,7 @@ import com.example.avalon.api.dto.PlayerPrivateViewResponse;
 import com.example.avalon.api.service.GameApplicationService;
 import com.example.avalon.api.service.ModelProfileCatalogService;
 import com.example.avalon.api.service.ModelProfileProbeService;
+import com.example.avalon.api.service.SeedGenerator;
 import com.example.avalon.config.model.AvalonConfigRegistry;
 import com.example.avalon.core.setup.model.SetupTemplate;
 import org.springframework.boot.ApplicationArguments;
@@ -41,13 +42,13 @@ import java.util.Objects;
 public class AvalonConsoleRunner implements ApplicationRunner {
     private static final String DEFAULT_RULE_SET_ID = "avalon-classic-5p-v1";
     private static final String DEFAULT_SETUP_TEMPLATE_ID = "classic-5p-v1";
-    private static final long DEFAULT_SEED = 42L;
     private static final int PLAYER_COUNT = 5;
 
     private final GameApplicationService gameApplicationService;
     private final ModelProfileCatalogService modelProfileCatalogService;
     private final ModelProfileProbeService modelProfileProbeService;
     private final AvalonConfigRegistry configRegistry;
+    private final SeedGenerator seedGenerator;
     private final ConsoleTranscriptPrinter printer;
     private final ConsoleDecisionReportBuilder decisionReportBuilder;
     private final ConsolePlaybackSettings playbackSettings;
@@ -60,6 +61,7 @@ public class AvalonConsoleRunner implements ApplicationRunner {
                                ModelProfileCatalogService modelProfileCatalogService,
                                ModelProfileProbeService modelProfileProbeService,
                                AvalonConfigRegistry configRegistry,
+                               SeedGenerator seedGenerator,
                                ConsoleTranscriptPrinter printer,
                                ConsoleDecisionReportBuilder decisionReportBuilder,
                                ConsolePlaybackSettings playbackSettings,
@@ -70,6 +72,7 @@ public class AvalonConsoleRunner implements ApplicationRunner {
         this.modelProfileCatalogService = modelProfileCatalogService;
         this.modelProfileProbeService = modelProfileProbeService;
         this.configRegistry = configRegistry;
+        this.seedGenerator = seedGenerator;
         this.printer = printer;
         this.decisionReportBuilder = decisionReportBuilder;
         this.playbackSettings = playbackSettings;
@@ -213,7 +216,7 @@ public class AvalonConsoleRunner implements ApplicationRunner {
         CreateGameRequest request = new CreateGameRequest();
         request.setRuleSetId(promptString(reader, "规则集 [" + DEFAULT_RULE_SET_ID + "]：", DEFAULT_RULE_SET_ID));
         request.setSetupTemplateId(promptString(reader, "配置模板 [" + DEFAULT_SETUP_TEMPLATE_ID + "]：", DEFAULT_SETUP_TEMPLATE_ID));
-        request.setSeed(promptLong(reader, "随机种子 [" + DEFAULT_SEED + "]：", DEFAULT_SEED));
+        request.setSeed(promptOptionalLong(reader, "随机种子 [留空自动生成]："));
         SetupTemplate setupTemplate = configRegistry.requireSetupTemplate(request.getSetupTemplateId());
 
         SeatPreset preset = promptPreset(reader);
@@ -753,6 +756,26 @@ public class AvalonConsoleRunner implements ApplicationRunner {
                 return Long.parseLong(raw);
             } catch (NumberFormatException ignored) {
                 System.out.println("请输入合法整数。");
+            }
+        }
+    }
+
+    private long promptOptionalLong(BufferedReader reader, String prompt) throws IOException {
+        while (true) {
+            System.out.print(prompt);
+            System.out.flush();
+            String raw = reader.readLine();
+            if (raw == null) {
+                throw new IllegalStateException("输入流已关闭");
+            }
+            String trimmed = raw.trim();
+            if (trimmed.isEmpty()) {
+                return seedGenerator.nextSeed();
+            }
+            try {
+                return Long.parseLong(trimmed);
+            } catch (NumberFormatException ignored) {
+                System.out.println("请输入合法整数，或直接回车使用自动生成值。");
             }
         }
     }

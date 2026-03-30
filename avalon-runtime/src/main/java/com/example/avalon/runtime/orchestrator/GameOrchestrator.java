@@ -28,6 +28,7 @@ import com.example.avalon.runtime.model.PlayerRegistration;
 import com.example.avalon.runtime.model.RuntimeAuditEntry;
 import com.example.avalon.runtime.service.GameSessionService;
 import com.example.avalon.runtime.service.ResolvedLlmConfigInitializer;
+import com.example.avalon.runtime.service.SeededLeaderSelector;
 import com.example.avalon.runtime.service.TurnContextBuilder;
 
 import java.util.ArrayList;
@@ -95,7 +96,7 @@ public class GameOrchestrator {
         state.status(GameStatus.RUNNING);
         state.phase(GamePhase.DISCUSSION);
         state.roundNo(1);
-        state.currentLeaderSeat(state.players().get(0).seatNo());
+        state.currentLeaderSeat(SeededLeaderSelector.initialLeaderSeat(state.players(), state.setup().seed()));
         state.resetRoundTurnState();
         state.appendEvent("GAME_STARTED", GamePhase.DISCUSSION, "SYSTEM", Map.of(
                 "leaderSeat", state.currentLeaderSeat(),

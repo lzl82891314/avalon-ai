@@ -1,8 +1,7 @@
 package com.example.avalon.agent.service;
 
-import com.example.avalon.agent.model.AgentTurnRequest;
-import com.example.avalon.agent.model.ModelProfile;
-import com.example.avalon.agent.model.PlayerAgentConfig;
+import com.example.avalon.agent.model.AgentTurnResult;
+import com.example.avalon.agent.model.AuditReason;
 import com.example.avalon.core.game.enums.Camp;
 import com.example.avalon.core.game.enums.GamePhase;
 import com.example.avalon.core.game.enums.GameStatus;
@@ -29,82 +28,37 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
-class AgentTurnRequestFactoryTest {
-    private final AgentTurnRequestFactory factory = new AgentTurnRequestFactory();
-
-    @Test
-    void shouldPopulateProviderModelAndOptionsFromAgentConfig() {
-        PlayerAgentConfig agentConfig = new PlayerAgentConfig();
-        ModelProfile modelProfile = new ModelProfile();
-        modelProfile.setModelId("openai-gpt-5.2");
-        modelProfile.setProvider("openai");
-        modelProfile.setModelName("gpt-5.2");
-        modelProfile.setTemperature(0.3);
-        modelProfile.setMaxTokens(240);
-        modelProfile.setProviderOptions(Map.of(
-                "apiKeyEnv", "OPENAI_API_KEY",
-                "response_format", Map.of("type", "json_object")
-        ));
-        agentConfig.setModelProfile(modelProfile);
-        agentConfig.setOutputSchemaVersion("v2");
-
-        AgentTurnRequest request = factory.create(teamVoteContext(), agentConfig);
-
-        assertEquals("openai-gpt-5.2", request.getModelId());
-        assertEquals("openai", request.getProvider());
-        assertEquals("gpt-5.2", request.getModelName());
-        assertEquals(0.3, request.getTemperature());
-        assertEquals(240, request.getMaxTokens());
-        assertEquals("OPENAI_API_KEY", request.getProviderOptions().get("apiKeyEnv"));
-        assertEquals("v2", request.getOutputSchemaVersion());
-    }
+class PrivateKnowledgeExpressionValidatorTest {
+    private final PrivateKnowledgeExpressionValidator validator = new PrivateKnowledgeExpressionValidator();
 
     @Test
-    void shouldDefaultToNoopProviderWhenModelProfileIsBlank() {
-        AgentTurnRequest request = factory.create(teamVoteContext(), new PlayerAgentConfig());
+    void shouldRejectCertainAssertionAboutCandidateOnlyKnowledge() {
+        AgentTurnResult result = new AgentTurnResult();
+        result.setPrivateThought("P5是梅林，P3是莫甘娜。");
+        result.setActionJson("{\"actionType\":\"TEAM_VOTE\",\"vote\":\"APPROVE\"}");
 
-        assertNull(request.getModelId());
-        assertEquals("noop", request.getProvider());
-        assertNull(request.getModelName());
-        assertNull(request.getTemperature());
-        assertNull(request.getMaxTokens());
-        assertEquals(Map.of(), request.getProviderOptions());
-    }
-
-    @Test
-    @SuppressWarnings("unchecked")
-    void shouldNormalizeVisiblePlayersIntoPlainMaps() {
-        AgentTurnRequest request = factory.create(percivalTeamVoteContext(), new PlayerAgentConfig());
-
-        List<Map<String, Object>> visiblePlayers = (List<Map<String, Object>>) request.getPrivateKnowledge().get("visiblePlayers");
-
-        assertEquals(2, visiblePlayers.size());
-        assertEquals("P3", visiblePlayers.get(0).get("playerId"));
-        assertEquals(List.of("MERLIN", "MORGANA"), visiblePlayers.get(0).get("candidateRoleIds"));
-        assertNull(visiblePlayers.get(0).get("exactRoleId"));
-    }
-
-    private PlayerTurnContext teamVoteContext() {
-        return teamVoteContext(
-                "MERLIN",
-                new PlayerPrivateKnowledge(List.of(), List.of())
+        assertThrows(
+                CandidateKnowledgeAssertionException.class,
+                () -> validator.validate(percivalTeamVoteContext(), result)
         );
+    }
+
+    @Test
+    void shouldAllowUncertainCandidateExpression() {
+        AgentTurnResult result = new AgentTurnResult();
+        result.setPrivateThought("我怀疑 P5 更像梅林。");
+        result.setActionJson("{\"actionType\":\"TEAM_VOTE\",\"vote\":\"APPROVE\"}");
+        AuditReason auditReason = new AuditReason();
+        auditReason.setReasonSummary(List.of("我猜 P3 可能更像莫甘娜。"));
+        result.setAuditReason(auditReason);
+
+        assertDoesNotThrow(() -> validator.validate(percivalTeamVoteContext(), result));
     }
 
     private PlayerTurnContext percivalTeamVoteContext() {
-        return teamVoteContext(
-                "PERCIVAL",
-                new PlayerPrivateKnowledge(List.of(
-                        new VisiblePlayerInfo("P3", 3, "Cara", null, Camp.GOOD, List.of("MERLIN", "MORGANA")),
-                        new VisiblePlayerInfo("P5", 5, "Eva", null, Camp.GOOD, List.of("MERLIN", "MORGANA"))
-                ), List.of("You see Merlin and Morgana as candidates."))
-        );
-    }
-
-    private PlayerTurnContext teamVoteContext(String roleId, PlayerPrivateKnowledge privateKnowledge) {
         RuleSetDefinition ruleSetDefinition = new RuleSetDefinition(
                 "avalon-classic-5p-v1",
                 "Avalon Classic 5 Players",
@@ -130,7 +84,7 @@ class AgentTurnRequestFactoryTest {
                 GamePhase.TEAM_VOTE.name(),
                 "P1",
                 1,
-                roleId,
+                "PERCIVAL",
                 new PublicGameSnapshot(
                         "game-1",
                         GameStatus.RUNNING,
@@ -153,12 +107,15 @@ class AgentTurnRequestFactoryTest {
                         "game-1",
                         "P1",
                         1,
-                        roleId,
+                        "PERCIVAL",
                         Camp.GOOD,
-                        privateKnowledge,
+                        new PlayerPrivateKnowledge(List.of(
+                                new VisiblePlayerInfo("P3", 3, "Cara", null, Camp.GOOD, List.of("MERLIN", "MORGANA")),
+                                new VisiblePlayerInfo("P5", 5, "Eva", null, Camp.GOOD, List.of("MERLIN", "MORGANA"))
+                        ), List.of("You see Merlin and Morgana as candidates.")),
                         List.of()
                 ),
-                PlayerMemoryState.empty("game-1", "P1", roleId, Camp.GOOD, Instant.parse("2026-03-24T00:00:00Z")),
+                PlayerMemoryState.empty("game-1", "P1", "PERCIVAL", Camp.GOOD, Instant.parse("2026-03-24T00:00:00Z")),
                 new AllowedActionSet("game-1", "P1", 1, EnumSet.of(PlayerActionType.TEAM_VOTE)),
                 ruleSetDefinition,
                 new SetupTemplate("classic-5p-v1", 5, true, List.of("MERLIN", "PERCIVAL", "LOYAL_SERVANT", "MORGANA", "ASSASSIN")),

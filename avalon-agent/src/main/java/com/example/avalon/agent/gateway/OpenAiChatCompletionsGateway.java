@@ -296,6 +296,11 @@ public class OpenAiChatCompletionsGateway implements AgentGateway {
                 auditReason 和 memoryUpdate 默认省略；只有在确有必要时才提供。
                 如果提供 auditReason，它必须是 JSON 对象，字段只允许 goal、reasonSummary、confidence、beliefs。
                 如果提供 memoryUpdate，它必须是 JSON 对象，字段只允许 suspicionDelta、trustDelta、observationsToAdd、commitmentsToAdd、inferredFactsToAdd、strategyMode、lastSummary。
+                关于私有知识的强规则：
+                - 只有 exactRoleId 明确告诉你的身份，才能当作确定事实写出来。
+                - candidateRoleIds 只代表候选集合，不代表你已知真实身份。
+                - 如果在 privateThought 或 auditReason.reasonSummary 中提到 candidateRoleIds，只能使用“怀疑 / 可能 / 更像 / 倾向 / 猜测”等不确定表达。
+                - 绝不能写“P5是梅林”“P3就是莫甘娜”这类确定断言。
                 """.strip());
         if ("minimax".equals(providerId(request))) {
             builder.append(System.lineSeparator())

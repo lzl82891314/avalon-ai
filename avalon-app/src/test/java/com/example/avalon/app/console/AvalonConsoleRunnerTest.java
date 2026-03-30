@@ -7,17 +7,21 @@ import com.example.avalon.api.dto.GameStateResponse;
 import com.example.avalon.api.dto.GameSummaryResponse;
 import com.example.avalon.api.dto.ModelProfileProbeResponse;
 import com.example.avalon.api.dto.ModelProfileResponse;
+import com.example.avalon.api.dto.PlayerPrivateViewResponse;
 import com.example.avalon.api.service.GameApplicationService;
 import com.example.avalon.api.service.ModelProfileCatalogService;
 import com.example.avalon.api.service.ModelProfileProbeService;
 import com.example.avalon.config.model.AvalonConfigRegistry;
 import com.example.avalon.core.setup.model.SetupTemplate;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.io.BufferedReader;
 import java.io.StringReader;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -117,6 +121,7 @@ class AvalonConsoleRunnerTest {
         ModelProfileProbeService modelProfileProbeService = mock(ModelProfileProbeService.class);
         AvalonConfigRegistry configRegistry = mock(AvalonConfigRegistry.class);
         ConsoleTranscriptPrinter printer = new ConsoleTranscriptPrinter();
+        ConsoleDecisionReportBuilder decisionReportBuilder = new ConsoleDecisionReportBuilder();
         List<Long> delays = new ArrayList<>();
         ConsolePlaybackSettings playbackSettings = new ConsolePlaybackSettings(true, 5L, 7L);
         ConsolePlaybackDelayer playbackDelayer = delays::add;
@@ -128,8 +133,10 @@ class AvalonConsoleRunnerTest {
                 modelProfileProbeService,
                 configRegistry,
                 printer,
+                decisionReportBuilder,
                 playbackSettings,
                 playbackDelayer,
+                "target/test-reports",
                 applicationContext
         );
 
@@ -150,6 +157,7 @@ class AvalonConsoleRunnerTest {
         when(gameApplicationService.stepGame("game-1")).thenReturn(new GameSummaryResponse());
         when(gameApplicationService.getEvents("game-1")).thenReturn(List.of(event(1L)));
         when(gameApplicationService.getAudit("game-1")).thenReturn(List.of(audit(1L)));
+        stubPlayerViews(gameApplicationService, "game-1");
 
         ReflectionTestUtils.invokeMethod(runner, "runActiveGame");
 
@@ -164,6 +172,7 @@ class AvalonConsoleRunnerTest {
         ModelProfileProbeService modelProfileProbeService = mock(ModelProfileProbeService.class);
         AvalonConfigRegistry configRegistry = mock(AvalonConfigRegistry.class);
         ConsoleTranscriptPrinter printer = mock(ConsoleTranscriptPrinter.class);
+        ConsoleDecisionReportBuilder decisionReportBuilder = mock(ConsoleDecisionReportBuilder.class);
         ConsolePlaybackSettings playbackSettings = new ConsolePlaybackSettings(true, 1L, 1L);
         ConsolePlaybackDelayer playbackDelayer = millis -> { };
         ConfigurableApplicationContext applicationContext = mock(ConfigurableApplicationContext.class);
@@ -174,8 +183,10 @@ class AvalonConsoleRunnerTest {
                 modelProfileProbeService,
                 configRegistry,
                 printer,
+                decisionReportBuilder,
                 playbackSettings,
                 playbackDelayer,
+                "target/test-reports",
                 applicationContext
         );
 
@@ -191,12 +202,80 @@ class AvalonConsoleRunnerTest {
         verify(printer).formatModelProbe(response);
     }
 
+    @Test
+    void stepActiveGameShouldWriteDecisionReportWhenGameEnds(@TempDir Path tempDir) throws Exception {
+        GameApplicationService gameApplicationService = mock(GameApplicationService.class);
+        ModelProfileCatalogService modelProfileCatalogService = mock(ModelProfileCatalogService.class);
+        ModelProfileProbeService modelProfileProbeService = mock(ModelProfileProbeService.class);
+        AvalonConfigRegistry configRegistry = mock(AvalonConfigRegistry.class);
+        ConsoleTranscriptPrinter printer = new ConsoleTranscriptPrinter();
+        ConsoleDecisionReportBuilder decisionReportBuilder = new ConsoleDecisionReportBuilder();
+        ConsolePlaybackSettings playbackSettings = new ConsolePlaybackSettings(false, 1L, 1L);
+        ConsolePlaybackDelayer playbackDelayer = millis -> { };
+        ConfigurableApplicationContext applicationContext = mock(ConfigurableApplicationContext.class);
+
+        AvalonConsoleRunner runner = new AvalonConsoleRunner(
+                gameApplicationService,
+                modelProfileCatalogService,
+                modelProfileProbeService,
+                configRegistry,
+                printer,
+                decisionReportBuilder,
+                playbackSettings,
+                playbackDelayer,
+                tempDir.toString(),
+                applicationContext
+        );
+
+        ConsoleGameSession session = (ConsoleGameSession) ReflectionTestUtils.getField(runner, "session");
+        CreateGameRequest request = new CreateGameRequest();
+        request.setPlayers(List.of(
+                player(1, "Alice"),
+                player(2, "Bob"),
+                player(3, "Cara"),
+                player(4, "Dylan"),
+                player(5, "Eva")
+        ));
+        session.activateNewGame("game-1", request);
+
+        List<GameEventEntryResponse> events = List.of(
+                event(1L, "GAME_STARTED", "DISCUSSION", "SYSTEM", Map.of("leaderSeat", 1)),
+                event(2L, "PLAYER_ACTION", "DISCUSSION", "P1", Map.of(
+                        "seatNo", 1,
+                        "actionType", "PUBLIC_SPEECH",
+                        "speech", "我先发一段公开信息。"
+                )),
+                event(3L, "GAME_ENDED", "GAME_END", "SYSTEM", Map.of("winner", "GOOD"))
+        );
+        List<GameAuditEntryResponse> audits = List.of(audit(2L));
+
+        when(gameApplicationService.getState("game-1"))
+                .thenReturn(state("game-1", "RUNNING", "DISCUSSION", 1, "P1", "等待玩家公开发言"))
+                .thenReturn(endedState("game-1", 1));
+        when(gameApplicationService.stepGame("game-1")).thenReturn(new GameSummaryResponse());
+        when(gameApplicationService.getEvents("game-1")).thenReturn(events, events);
+        when(gameApplicationService.getAudit("game-1")).thenReturn(audits, audits);
+        stubPlayerViews(gameApplicationService, "game-1");
+
+        ReflectionTestUtils.invokeMethod(runner, "stepActiveGame");
+
+        Path reportPath = tempDir.resolve("game-1-decision-report.md");
+        assertThat(reportPath).exists();
+        assertThat(Files.readString(reportPath))
+                .contains("# 决策报告：game-1")
+                .contains("## 角色总表")
+                .contains("| 序号 | 阶段 | 玩家 | 角色 | 动作 | 公开发言 | 私有思考 | 备注 |")
+                .contains("## 第1轮")
+                .contains("我先发一段公开信息。");
+    }
+
     private AvalonConsoleRunner runnerWithProfiles(List<ModelProfileResponse> profiles) {
         GameApplicationService gameApplicationService = mock(GameApplicationService.class);
         ModelProfileCatalogService modelProfileCatalogService = mock(ModelProfileCatalogService.class);
         ModelProfileProbeService modelProfileProbeService = mock(ModelProfileProbeService.class);
         AvalonConfigRegistry configRegistry = mock(AvalonConfigRegistry.class);
         ConsoleTranscriptPrinter printer = mock(ConsoleTranscriptPrinter.class);
+        ConsoleDecisionReportBuilder decisionReportBuilder = mock(ConsoleDecisionReportBuilder.class);
         ConsolePlaybackSettings playbackSettings = new ConsolePlaybackSettings(true, 1L, 1L);
         ConsolePlaybackDelayer playbackDelayer = millis -> { };
         ConfigurableApplicationContext applicationContext = mock(ConfigurableApplicationContext.class);
@@ -210,8 +289,10 @@ class AvalonConsoleRunnerTest {
                 modelProfileProbeService,
                 configRegistry,
                 printer,
+                decisionReportBuilder,
                 playbackSettings,
                 playbackDelayer,
+                "target/test-reports",
                 applicationContext
         );
     }
@@ -259,6 +340,28 @@ class AvalonConsoleRunnerTest {
         return state;
     }
 
+    private GameStateResponse endedState(String gameId, int roundNo) {
+        GameStateResponse state = state(gameId, "ENDED", "GAME_END", roundNo, null, "游戏已结束");
+        Map<String, Object> publicState = new LinkedHashMap<>(state.getPublicState());
+        publicState.put("winnerCamp", "GOOD");
+        state.setPublicState(publicState);
+        return state;
+    }
+
+    private GameEventEntryResponse event(long seqNo,
+                                         String type,
+                                         String phase,
+                                         String actorId,
+                                         Map<String, Object> payload) {
+        GameEventEntryResponse event = new GameEventEntryResponse();
+        event.setSeqNo(seqNo);
+        event.setType(type);
+        event.setPhase(phase);
+        event.setActorId(actorId);
+        event.setPayload(payload);
+        return event;
+    }
+
     private GameEventEntryResponse event(long seqNo) {
         GameEventEntryResponse event = new GameEventEntryResponse();
         event.setSeqNo(seqNo);
@@ -281,6 +384,31 @@ class AvalonConsoleRunnerTest {
         entry.setAuditReasonJson("{\"reasonSummary\":[\"先做低风险试探\"]}");
         entry.setParsedActionJson("{\"actionType\":\"PUBLIC_SPEECH\"}");
         return entry;
+    }
+
+    private void stubPlayerViews(GameApplicationService gameApplicationService, String gameId) {
+        when(gameApplicationService.getPlayerView(gameId, "P1"))
+                .thenReturn(playerView(1, "PERCIVAL", "GOOD", "P2/Bob∈[梅林, 莫甘娜]"));
+        when(gameApplicationService.getPlayerView(gameId, "P2"))
+                .thenReturn(playerView(2, "MERLIN", "GOOD", "P4/Dylan=莫甘娜；P5/Eva=刺客"));
+        when(gameApplicationService.getPlayerView(gameId, "P3"))
+                .thenReturn(playerView(3, "LOYAL_SERVANT", "GOOD", "无"));
+        when(gameApplicationService.getPlayerView(gameId, "P4"))
+                .thenReturn(playerView(4, "MORGANA", "EVIL", "P5/Eva=刺客"));
+        when(gameApplicationService.getPlayerView(gameId, "P5"))
+                .thenReturn(playerView(5, "ASSASSIN", "EVIL", "P4/Dylan=莫甘娜"));
+    }
+
+    private PlayerPrivateViewResponse playerView(int seatNo, String roleId, String camp, String knowledgeSummary) {
+        PlayerPrivateViewResponse response = new PlayerPrivateViewResponse();
+        response.setSeatNo(seatNo);
+        response.setRoleSummary(roleId);
+        response.setPrivateKnowledge(Map.of(
+                "camp", camp,
+                "notes", List.of(knowledgeSummary),
+                "visiblePlayers", List.of()
+        ));
+        return response;
     }
 
     private CreateGameRequest.PlayerSlotRequest player(int seatNo, String name) {

@@ -313,7 +313,7 @@ public final class YamlConfigLoader {
             result.add(new KnowledgeRuleDefinition(
                     type,
                     targetCamp,
-                    targetRoles(type, map),
+                    targetRoles(type, map, file),
                     stringList(map.get("exclusions"))
             ));
         }
@@ -324,21 +324,25 @@ public final class YamlConfigLoader {
         String normalized = rawType.trim().toUpperCase(Locale.ROOT);
         return switch (normalized) {
             case "SEE_PLAYERS_BY_CAMP" -> KnowledgeRuleType.SEE_PLAYERS_BY_CAMP;
-            case "SEE_PLAYERS_BY_ROLE", "SEE_ROLE_AMBIGUITY", "MISLEAD_PERCIVAL" -> KnowledgeRuleType.SEE_PLAYERS_BY_ROLE;
+            case "SEE_PLAYERS_BY_ROLE" -> KnowledgeRuleType.SEE_PLAYERS_BY_ROLE;
+            case "SEE_ROLE_AMBIGUITY" -> KnowledgeRuleType.SEE_ROLE_AMBIGUITY;
+            case "MISLEAD_PERCIVAL" -> throw new ConfigLoadException(
+                    "Unsupported knowledge rule type '" + rawType + "' in " + file
+                            + "; use SEE_ROLE_AMBIGUITY on Percival instead"
+            );
             case "SEE_ALLIED_EVIL_PLAYERS" -> KnowledgeRuleType.SEE_ALLIED_EVIL_PLAYERS;
             default -> throw new ConfigLoadException("Unsupported knowledge rule type '" + rawType + "' in " + file);
         };
     }
 
-    private List<String> targetRoles(KnowledgeRuleType type, Map<String, Object> map) {
+    private List<String> targetRoles(KnowledgeRuleType type, Map<String, Object> map, Path file) {
         List<String> explicitTargetRoles = stringList(map.get("targetRoles"));
-        if (!explicitTargetRoles.isEmpty()) {
-            return explicitTargetRoles;
+        if (type == KnowledgeRuleType.SEE_PLAYERS_BY_ROLE || type == KnowledgeRuleType.SEE_ROLE_AMBIGUITY) {
+            if (explicitTargetRoles.isEmpty()) {
+                throw new ConfigLoadException("knowledgeRules.targetRoles must not be empty for " + type + " in " + file);
+            }
         }
-        return switch (type) {
-            case SEE_PLAYERS_BY_ROLE -> List.of("MERLIN", "MORGANA");
-            default -> List.of();
-        };
+        return explicitTargetRoles;
     }
 
     private Map<String, Object> asOptionalMap(Object value, String fieldName, Path file) {

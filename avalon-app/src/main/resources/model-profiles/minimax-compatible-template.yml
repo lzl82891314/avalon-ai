@@ -5,9 +5,9 @@ provider: minimax
 modelName: minimax-m2.7
 temperature: 0.2
 maxTokens: 320
-enabled: false
+enabled: true
 providerOptions:
-  apiKeyEnv: MINIMAX_API_KEY
+  apiKey: sk-DHfMbEGNIY1HVIDG0viBphkkoAbR854c2Pae80A9vQ7D5SlQ
   baseUrl: https://gcapi.cn/v1
   instructionRole: system
   response_format:

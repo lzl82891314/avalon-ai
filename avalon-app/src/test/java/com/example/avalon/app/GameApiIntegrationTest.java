@@ -162,6 +162,10 @@ class GameApiIntegrationTest {
                     }
                 }
                 case "LOYAL_SERVANT" -> assertThat(visiblePlayers.isEmpty()).isTrue();
+                case "MORGANA" -> {
+                    List<String> exactRoles = jsonTextList(visiblePlayers, "exactRoleId");
+                    assertThat(exactRoles).containsExactly("ASSASSIN");
+                }
                 case "ASSASSIN" -> {
                     List<String> exactRoles = jsonTextList(visiblePlayers, "exactRoleId");
                     assertThat(exactRoles).containsExactly("MORGANA");

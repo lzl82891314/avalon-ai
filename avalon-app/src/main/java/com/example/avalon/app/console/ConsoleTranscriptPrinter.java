@@ -11,6 +11,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -42,6 +43,7 @@ public class ConsoleTranscriptPrinter {
                   start          启动当前游戏
                   step           执行一个运行时步骤并打印新增信息
                   run            如有需要先启动，再以慢速播放方式运行到结束或暂停
+                  report         输出局后决策表，并写入 Markdown 报告
                   state          查看当前公开局面
                   players        查看全部五名玩家的私有视角
                   player <id>    查看指定玩家的私有视角，例如 `player P1`
@@ -53,6 +55,7 @@ public class ConsoleTranscriptPrinter {
                   exit           退出控制台
 
                 说明
+                  局后报告默认写入 `target/reports/avalon/<gameId>-decision-report.md`。
                   V1 仍不支持真人实时提交动作。
                   模型池 LLM 席位通过静态或托管 model profile 选择。
                   如果想离线演示，可选择 `noop` 使用确定性回退策略。
@@ -325,6 +328,142 @@ public class ConsoleTranscriptPrinter {
         return builder.toString();
     }
 
+    public String formatDecisionReport(ConsoleDecisionReport report, ConsoleGameSession session, Path markdownPath) {
+        Map<String, ConsoleDecisionPlayer> playersById = reportPlayersById(report);
+        StringBuilder builder = new StringBuilder();
+        builder.append("局后决策报告 ").append(Objects.toString(report.gameId(), "-"))
+                .append(System.lineSeparator())
+                .append("  状态=").append(statusLabel(report.status()))
+                .append(" 阶段=").append(phaseLabel(report.phase()))
+                .append(" 轮次=").append(report.roundNo() == null ? "-" : "第" + report.roundNo() + "轮")
+                .append(System.lineSeparator())
+                .append("  胜利阵营=").append(campLabel(report.winnerCamp()))
+                .append(System.lineSeparator())
+                .append("  Markdown=").append(markdownPath.toAbsolutePath().normalize())
+                .append(System.lineSeparator())
+                .append("  说明=privateThought 是模型原始文本，不等同于规则允许的确定知识");
+
+        if (!report.players().isEmpty()) {
+            builder.append(System.lineSeparator())
+                    .append(System.lineSeparator())
+                    .append("角色总表")
+                    .append(System.lineSeparator())
+                    .append(renderMarkdownTable(
+                            List.of("座位", "玩家", "角色", "阵营", "初始私有知识"),
+                            report.players().stream()
+                                    .map(player -> List.of(
+                                            Objects.toString(player.seatNo(), "-"),
+                                            limitConsoleCell(reportPlayerLabel(playersById, session, player.playerId()), 14),
+                                            limitConsoleCell(roleLabel(player.roleId()), 10),
+                                            limitConsoleCell(campLabel(player.camp()), 10),
+                                            limitConsoleCell(orDash(player.privateKnowledgeSummary()), 48)
+                                    ))
+                                    .toList()
+                    ));
+        }
+
+        for (ConsoleDecisionSection section : report.sections()) {
+            builder.append(System.lineSeparator())
+                    .append(System.lineSeparator())
+                    .append(section.title());
+            String summary = reportSectionSummary(section, session, playersById);
+            if (summary != null) {
+                builder.append(System.lineSeparator())
+                        .append("  摘要=").append(summary);
+            }
+            if (section.rows().isEmpty()) {
+                builder.append(System.lineSeparator())
+                        .append("  本节没有可展示的 agent 决策。");
+                continue;
+            }
+            builder.append(System.lineSeparator())
+                    .append(renderMarkdownTable(
+                            List.of("序号", "阶段", "玩家", "角色", "动作", "公开发言", "私有思考", "备注"),
+                            section.rows().stream()
+                                    .map(row -> List.of(
+                                            Objects.toString(row.eventSeqNo(), "-"),
+                                            limitConsoleCell(phaseLabel(row.phase()), 10),
+                                            limitConsoleCell(reportPlayerLabel(playersById, session, row.playerId()), 14),
+                                            limitConsoleCell(roleLabel(row.roleId()), 10),
+                                            limitConsoleCell(reportActionLabel(row, session, playersById), 20),
+                                            limitConsoleCell(orDash(row.publicSpeech()), 24),
+                                            limitConsoleCell(orDash(row.privateThought()), 24),
+                                            limitConsoleCell(orDash(row.note()), 24)
+                                    ))
+                                    .toList()
+                    ));
+        }
+        return builder.toString();
+    }
+
+    public String formatDecisionReportMarkdown(ConsoleDecisionReport report, ConsoleGameSession session) {
+        Map<String, ConsoleDecisionPlayer> playersById = reportPlayersById(report);
+        StringBuilder builder = new StringBuilder();
+        builder.append("# 决策报告：").append(Objects.toString(report.gameId(), "-"))
+                .append(System.lineSeparator())
+                .append(System.lineSeparator())
+                .append("- 状态：").append(statusLabel(report.status())).append(System.lineSeparator())
+                .append("- 阶段：").append(phaseLabel(report.phase())).append(System.lineSeparator())
+                .append("- 当前轮次：").append(report.roundNo() == null ? "-" : "第" + report.roundNo() + "轮").append(System.lineSeparator())
+                .append("- 胜利阵营：").append(campLabel(report.winnerCamp())).append(System.lineSeparator())
+                .append("- 说明：privateThought 是模型原始文本，不等同于规则允许的确定知识").append(System.lineSeparator());
+
+        if (!report.players().isEmpty()) {
+            builder.append(System.lineSeparator())
+                    .append("## 角色总表")
+                    .append(System.lineSeparator())
+                    .append(System.lineSeparator())
+                    .append(renderMarkdownTable(
+                            List.of("座位", "玩家", "角色", "阵营", "初始私有知识"),
+                            report.players().stream()
+                                    .map(player -> List.of(
+                                            Objects.toString(player.seatNo(), "-"),
+                                            reportPlayerLabel(playersById, session, player.playerId()),
+                                            roleLabel(player.roleId()),
+                                            campLabel(player.camp()),
+                                            orDash(player.privateKnowledgeSummary())
+                                    ))
+                                    .toList()
+                    ))
+                    .append(System.lineSeparator());
+        }
+
+        for (ConsoleDecisionSection section : report.sections()) {
+            builder.append(System.lineSeparator())
+                    .append("## ").append(section.title())
+                    .append(System.lineSeparator())
+                    .append(System.lineSeparator());
+            String summary = reportSectionSummary(section, session, playersById);
+            if (summary != null) {
+                builder.append(summary)
+                        .append(System.lineSeparator())
+                        .append(System.lineSeparator());
+            }
+            if (section.rows().isEmpty()) {
+                builder.append("本节没有可展示的 agent 决策。")
+                        .append(System.lineSeparator());
+                continue;
+            }
+            builder.append(renderMarkdownTable(
+                            List.of("序号", "阶段", "玩家", "角色", "动作", "公开发言", "私有思考", "备注"),
+                            section.rows().stream()
+                                    .map(row -> List.of(
+                                            Objects.toString(row.eventSeqNo(), "-"),
+                                            phaseLabel(row.phase()),
+                                            reportPlayerLabel(playersById, session, row.playerId()),
+                                            roleLabel(row.roleId()),
+                                            reportActionLabel(row, session, playersById),
+                                            orDash(row.publicSpeech()),
+                                            orDash(row.privateThought()),
+                                            orDash(row.note())
+                                    ))
+                                    .toList()
+                    ))
+                    .append(System.lineSeparator());
+        }
+        return builder.toString();
+    }
+
     private void appendJsonBlock(StringBuilder builder, String label, String json) {
         if (json == null || json.isBlank()) {
             return;
@@ -508,6 +647,140 @@ public class ConsoleTranscriptPrinter {
             return reasoningPreview;
         }
         return reasonSummary(entry.getAuditReasonJson());
+    }
+
+    private String reportSectionSummary(ConsoleDecisionSection section,
+                                        ConsoleGameSession session,
+                                        Map<String, ConsoleDecisionPlayer> playersById) {
+        List<String> parts = new ArrayList<>();
+        if (section.leaderPlayerId() != null) {
+            parts.add("队长=" + reportPlayerLabel(playersById, session, section.leaderPlayerId()));
+        }
+        if (!section.teamPlayerIds().isEmpty()) {
+            parts.add("队伍=" + section.teamPlayerIds().stream()
+                    .map(playerId -> reportPlayerLabel(playersById, session, playerId))
+                    .collect(Collectors.toList()));
+        }
+        if (!section.votes().isEmpty()) {
+            long approves = section.votes().stream()
+                    .filter(vote -> "APPROVE".equals(vote.vote()))
+                    .count();
+            long rejects = section.votes().size() - approves;
+            String voteDetail = section.votes().stream()
+                    .map(vote -> reportPlayerLabel(playersById, session, vote.playerId()) + voteLabel(vote.vote()))
+                    .collect(Collectors.joining("，"));
+            String voteSummary = "投票=" + approves + "赞成/" + rejects + "反对";
+            if (section.voteRejected()) {
+                voteSummary += "，结果=否决";
+            } else if (section.missionOutcome() != null) {
+                voteSummary += "，结果=通过";
+            } else if (section.pauseReason() != null) {
+                voteSummary += "，结果=中断";
+            }
+            if (!voteDetail.isBlank()) {
+                voteSummary += "（" + voteDetail + "）";
+            }
+            parts.add(voteSummary);
+        }
+        if (section.missionOutcome() != null) {
+            if ("FAILED".equals(section.missionOutcome())) {
+                parts.add("任务=失败" + (section.missionFailCount() == null ? "" : "（失败票 " + section.missionFailCount() + "）"));
+            } else {
+                parts.add("任务=成功");
+            }
+        }
+        if (section.pauseReason() != null) {
+            parts.add("暂停=" + pauseReasonLabel(section.pauseReason()));
+        }
+        if (section.winnerCamp() != null) {
+            parts.add("胜利=" + campLabel(section.winnerCamp()));
+        }
+        return parts.isEmpty() ? null : String.join(" | ", parts);
+    }
+
+    private String reportActionLabel(ConsoleDecisionRow row,
+                                     ConsoleGameSession session,
+                                     Map<String, ConsoleDecisionPlayer> playersById) {
+        String action = actionTypeLabel(row.actionType());
+        if (row.actionDetail() == null) {
+            return row.failed() ? action + " [失败]" : action;
+        }
+        String detail = switch (Objects.toString(row.actionType(), "")) {
+            case "TEAM_VOTE" -> voteLabel(row.actionDetail());
+            case "MISSION_ACTION" -> missionChoiceLabel(row.actionDetail());
+            case "ASSASSINATION" -> "目标=" + reportPlayerLabel(playersById, session, row.actionDetail());
+            default -> row.actionDetail();
+        };
+        return row.failed() ? action + "（" + detail + "，失败）" : action + "（" + detail + "）";
+    }
+
+    private Map<String, ConsoleDecisionPlayer> reportPlayersById(ConsoleDecisionReport report) {
+        return report.players().stream()
+                .filter(player -> player.playerId() != null && !player.playerId().isBlank())
+                .collect(Collectors.toMap(
+                        ConsoleDecisionPlayer::playerId,
+                        player -> player,
+                        (left, right) -> left,
+                        LinkedHashMap::new
+                ));
+    }
+
+    private String reportPlayerLabel(Map<String, ConsoleDecisionPlayer> playersById,
+                                     ConsoleGameSession session,
+                                     String playerId) {
+        String sessionLabel = session.labelForPlayer(playerId);
+        if (playerId == null || playerId.isBlank() || "SYSTEM".equals(playerId)) {
+            return sessionLabel;
+        }
+        if (!Objects.equals(sessionLabel, playerId)) {
+            return sessionLabel;
+        }
+        ConsoleDecisionPlayer player = playersById.get(playerId);
+        if (player == null || player.displayName() == null || player.displayName().isBlank()
+                || Objects.equals(player.displayName(), playerId)) {
+            return sessionLabel;
+        }
+        return playerId + "/" + player.displayName();
+    }
+
+    private String renderMarkdownTable(List<String> headers, List<List<String>> rows) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("| ")
+                .append(String.join(" | ", headers))
+                .append(" |")
+                .append(System.lineSeparator())
+                .append("| ")
+                .append(headers.stream().map(ignored -> "---").collect(Collectors.joining(" | ")))
+                .append(" |");
+        for (List<String> row : rows) {
+            builder.append(System.lineSeparator())
+                    .append("| ")
+                    .append(row.stream().map(this::escapeMarkdownCell).collect(Collectors.joining(" | ")))
+                    .append(" |");
+        }
+        return builder.toString();
+    }
+
+    private String limitConsoleCell(String value, int maxLength) {
+        String normalized = orDash(value);
+        if (normalized.length() <= maxLength) {
+            return normalized;
+        }
+        if (maxLength <= 1) {
+            return normalized.substring(0, maxLength);
+        }
+        return normalized.substring(0, maxLength - 1) + "…";
+    }
+
+    private String escapeMarkdownCell(String value) {
+        return orDash(value)
+                .replace("|", "\\|")
+                .replace("\r", " ")
+                .replace("\n", "<br/>");
+    }
+
+    private String orDash(String value) {
+        return value == null || value.isBlank() ? "-" : value;
     }
 
     private String detailedError(GameAuditEntryResponse entry) {

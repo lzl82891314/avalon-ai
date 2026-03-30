@@ -18,16 +18,22 @@ import com.example.avalon.core.setup.model.SetupTemplate;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.stereotype.Component;
 
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 
 @Component
@@ -43,9 +49,11 @@ public class AvalonConsoleRunner implements ApplicationRunner {
     private final ModelProfileProbeService modelProfileProbeService;
     private final AvalonConfigRegistry configRegistry;
     private final ConsoleTranscriptPrinter printer;
+    private final ConsoleDecisionReportBuilder decisionReportBuilder;
     private final ConsolePlaybackSettings playbackSettings;
     private final ConsolePlaybackDelayer playbackDelayer;
     private final ConfigurableApplicationContext applicationContext;
+    private final Path reportOutputDir;
     private final ConsoleGameSession session = new ConsoleGameSession();
 
     public AvalonConsoleRunner(GameApplicationService gameApplicationService,
@@ -53,16 +61,20 @@ public class AvalonConsoleRunner implements ApplicationRunner {
                                ModelProfileProbeService modelProfileProbeService,
                                AvalonConfigRegistry configRegistry,
                                ConsoleTranscriptPrinter printer,
+                               ConsoleDecisionReportBuilder decisionReportBuilder,
                                ConsolePlaybackSettings playbackSettings,
                                ConsolePlaybackDelayer playbackDelayer,
+                               @Value("${avalon.console.report.output-dir:target/reports/avalon}") String reportOutputDir,
                                ConfigurableApplicationContext applicationContext) {
         this.gameApplicationService = gameApplicationService;
         this.modelProfileCatalogService = modelProfileCatalogService;
         this.modelProfileProbeService = modelProfileProbeService;
         this.configRegistry = configRegistry;
         this.printer = printer;
+        this.decisionReportBuilder = decisionReportBuilder;
         this.playbackSettings = playbackSettings;
         this.playbackDelayer = playbackDelayer;
+        this.reportOutputDir = Path.of(reportOutputDir);
         this.applicationContext = applicationContext;
     }
 
@@ -130,6 +142,10 @@ public class AvalonConsoleRunner implements ApplicationRunner {
             }
             case "run" -> {
                 runActiveGame();
+                yield true;
+            }
+            case "report" -> {
+                printDecisionReportCommand();
                 yield true;
             }
             case "state" -> {
@@ -498,6 +514,7 @@ public class AvalonConsoleRunner implements ApplicationRunner {
         printNewAudits();
         GameStateResponse after = gameApplicationService.getState(gameId);
         System.out.println(printer.formatState(after, session));
+        printDecisionReportIfTerminal(after, before.getStatus());
     }
 
     private void runActiveGame() {
@@ -522,6 +539,9 @@ public class AvalonConsoleRunner implements ApplicationRunner {
 
         if (safety <= 0) {
             throw new IllegalStateException("运行步数超过安全上限 500");
+        }
+        if ("ENDED".equals(state.getStatus()) || "PAUSED".equals(state.getStatus())) {
+            printDecisionReport(state);
         }
     }
 
@@ -628,6 +648,84 @@ public class AvalonConsoleRunner implements ApplicationRunner {
                     System.out.println(printer.formatInlineThought(entry, session));
                     session.updateLastPrintedAuditEventSeqNo(entry.getEventSeqNo());
                 });
+    }
+
+    private void printDecisionReportCommand() {
+        String gameId = ensureActiveGame();
+        GameStateResponse state = gameApplicationService.getState(gameId);
+        printDecisionReport(state);
+    }
+
+    private void printDecisionReportIfTerminal(GameStateResponse after, String previousStatus) {
+        if (after == null) {
+            return;
+        }
+        boolean terminal = "ENDED".equals(after.getStatus()) || "PAUSED".equals(after.getStatus());
+        if (!terminal) {
+            return;
+        }
+        if (Objects.equals(previousStatus, after.getStatus())) {
+            return;
+        }
+        printDecisionReport(after);
+    }
+
+    private void printDecisionReport(GameStateResponse state) {
+        List<GameEventEntryResponse> events = gameApplicationService.getEvents(session.gameId());
+        List<GameAuditEntryResponse> audits = gameApplicationService.getAudit(session.gameId());
+        List<ConsoleDecisionPlayer> players = loadDecisionReportPlayers();
+        ConsoleDecisionReport report = decisionReportBuilder.build(state, events, audits, players);
+        Path reportPath = resolveReportPath(session.gameId());
+        String markdown = printer.formatDecisionReportMarkdown(report, session);
+        writeDecisionReport(reportPath, markdown);
+        System.out.println(printer.formatDecisionReport(report, session, reportPath));
+    }
+
+    private List<ConsoleDecisionPlayer> loadDecisionReportPlayers() {
+        List<ConsoleDecisionPlayer> players = new ArrayList<>();
+        for (int seatNo = 1; seatNo <= PLAYER_COUNT; seatNo++) {
+            String playerId = "P" + seatNo;
+            PlayerPrivateViewResponse view = gameApplicationService.getPlayerView(session.gameId(), playerId);
+            players.add(new ConsoleDecisionPlayer(
+                    playerId,
+                    view.getSeatNo() == null ? seatNo : view.getSeatNo(),
+                    displayNameForReport(playerId),
+                    view.getRoleSummary(),
+                    stringValue(view.getPrivateKnowledge().get("camp")),
+                    ConsoleKnowledgeFormatter.summarize(view.getPrivateKnowledge())
+            ));
+        }
+        return players;
+    }
+
+    private String displayNameForReport(String playerId) {
+        String label = session.labelForPlayer(playerId);
+        String prefix = playerId + "/";
+        if (label != null && label.startsWith(prefix)) {
+            return label.substring(prefix.length());
+        }
+        return playerId;
+    }
+
+    private String stringValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = String.valueOf(value);
+        return text.isBlank() ? null : text;
+    }
+
+    private Path resolveReportPath(String gameId) {
+        return reportOutputDir.resolve(gameId + "-decision-report.md").toAbsolutePath().normalize();
+    }
+
+    private void writeDecisionReport(Path reportPath, String markdown) {
+        try {
+            Files.createDirectories(reportPath.getParent());
+            Files.writeString(reportPath, markdown, StandardCharsets.UTF_8);
+        } catch (IOException exception) {
+            throw new UncheckedIOException("写入 Markdown 报告失败: " + reportPath, exception);
+        }
     }
 
     private String ensureActiveGame() {

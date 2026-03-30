@@ -7,6 +7,7 @@ public class GameAuditEntryResponse {
     private Long eventSeqNo;
     private String playerId;
     private String visibility;
+    private String inputContextJson;
     private String rawModelResponseJson;
     private String parsedActionJson;
     private String auditReasonJson;
@@ -44,6 +45,14 @@ public class GameAuditEntryResponse {
 
     public void setVisibility(String visibility) {
         this.visibility = visibility;
+    }
+
+    public String getInputContextJson() {
+        return inputContextJson;
+    }
+
+    public void setInputContextJson(String inputContextJson) {
+        this.inputContextJson = inputContextJson;
     }
 
     public String getRawModelResponseJson() {

@@ -198,6 +198,64 @@ class ConsoleTranscriptPrinterTest {
                 .contains("错误=OpenAI-compatible assistant content was empty (shape=reasoning_only)");
     }
 
+    @Test
+    void shouldRenderDecisionReportForConsoleAndMarkdown() {
+        ConsoleGameSession session = buildSession();
+        ConsoleDecisionReport report = new ConsoleDecisionReport(
+                "game-1",
+                "ENDED",
+                "GAME_END",
+                "GOOD",
+                2,
+                List.of(
+                        new ConsoleDecisionPlayer("P1", 1, "Alice", "PERCIVAL", "GOOD", "P3/Cara∈[梅林, 莫甘娜]；notes: You see Merlin and Morgana as candidates."),
+                        new ConsoleDecisionPlayer("P2", 2, "Bob", "MERLIN", "GOOD", "P4/Dylan=莫甘娜；P5/Eva=刺客"),
+                        new ConsoleDecisionPlayer("P3", 3, "Cara", "MORGANA", "EVIL", "P5/Eva=刺客")
+                ),
+                List.of(new ConsoleDecisionSection(
+                        "ROUND-1",
+                        "第1轮",
+                        "P1",
+                        List.of("P1", "P2"),
+                        List.of(new ConsoleDecisionVote("P1", "APPROVE"), new ConsoleDecisionVote("P2", "REJECT")),
+                        false,
+                        "SUCCESS",
+                        0L,
+                        null,
+                        null,
+                        List.of(new ConsoleDecisionRow(
+                                8L,
+                                "TEAM_PROPOSAL",
+                                "P1",
+                                "PERCIVAL",
+                                "TEAM_PROPOSAL",
+                                "[P1, P2]",
+                                "我先提一个可验证的队伍。",
+                                "先低风险试探一下。",
+                                null,
+                                false
+                        ))
+                ))
+        );
+
+        assertThat(printer.formatDecisionReport(report, session, java.nio.file.Path.of("target/reports/avalon/game-1-decision-report.md")))
+                .contains("局后决策报告 game-1")
+                .contains("角色总表")
+                .contains("说明=privateThought 是模型原始文本，不等同于规则允许的确定知识")
+                .contains("第1轮")
+                .contains("摘要=队长=P1/Alice")
+                .contains("| 座位 | 玩家 | 角色 | 阵营 | 初始私有知识 |")
+                .contains("| 序号 | 阶段 | 玩家 | 角色 | 动作 | 公开发言 | 私有思考 | 备注 |");
+        assertThat(printer.formatDecisionReportMarkdown(report, session))
+                .contains("# 决策报告：game-1")
+                .contains("## 角色总表")
+                .contains("- 说明：privateThought 是模型原始文本，不等同于规则允许的确定知识")
+                .contains("## 第1轮")
+                .contains("| 序号 | 阶段 | 玩家 | 角色 | 动作 | 公开发言 | 私有思考 | 备注 |")
+                .contains("派西维尔")
+                .contains("提出队伍（[P1, P2]）");
+    }
+
     private ConsoleGameSession buildSession() {
         CreateGameRequest request = new CreateGameRequest();
         request.setPlayers(List.of(

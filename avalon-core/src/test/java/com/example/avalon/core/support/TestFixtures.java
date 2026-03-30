@@ -74,7 +74,7 @@ public final class TestFixtures {
                         "Percival",
                         Camp.GOOD,
                         "Knows Merlin and Morgana candidates.",
-                        List.of(new KnowledgeRuleDefinition(KnowledgeRuleType.SEE_PLAYERS_BY_ROLE, null, List.of("MERLIN", "MORGANA"), List.of())),
+                        List.of(new KnowledgeRuleDefinition(KnowledgeRuleType.SEE_ROLE_AMBIGUITY, null, List.of("MERLIN", "MORGANA"), List.of())),
                         List.of(),
                         true,
                         true,
@@ -100,7 +100,7 @@ public final class TestFixtures {
                         "Morgana",
                         Camp.EVIL,
                         "Looks like Merlin to Percival.",
-                        List.of(new KnowledgeRuleDefinition(KnowledgeRuleType.SEE_ALLIED_EVIL_PLAYERS, null, List.of(), List.of())),
+                        List.of(new KnowledgeRuleDefinition(KnowledgeRuleType.SEE_ALLIED_EVIL_PLAYERS, null, List.of(), List.of("OBERON"))),
                         List.of(),
                         true,
                         true,
@@ -143,4 +143,3 @@ public final class TestFixtures {
         return waitingSession().startRunning(Instant.parse("2026-03-23T00:00:00Z"));
     }
 }
-

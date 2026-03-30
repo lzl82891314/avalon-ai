@@ -7,7 +7,8 @@ canVote: true
 canLead: true
 canAssassinate: false
 knowledgeRules:
-  - type: MISLEAD_PERCIVAL
+  - type: SEE_ALLIED_EVIL_PLAYERS
+    exclusions:
+      - OBERON
 actionCapabilities: []
 passiveTraits: []
-

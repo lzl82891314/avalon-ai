@@ -26,11 +26,13 @@ class VisibilityServiceTest {
         RoleAssignment percival = assignmentByRole(state, "PERCIVAL");
         RoleAssignment loyalServant = assignmentByRole(state, "LOYAL_SERVANT");
         RoleAssignment assassin = assignmentByRole(state, "ASSASSIN");
+        RoleAssignment morgana = assignmentByRole(state, "MORGANA");
 
         PlayerPrivateView merlinView = visibilityService.buildPrivateView(state, merlin);
         PlayerPrivateView percivalView = visibilityService.buildPrivateView(state, percival);
         PlayerPrivateView loyalServantView = visibilityService.buildPrivateView(state, loyalServant);
         PlayerPrivateView assassinView = visibilityService.buildPrivateView(state, assassin);
+        PlayerPrivateView morganaView = visibilityService.buildPrivateView(state, morgana);
 
         List<String> merlinVisibleRoles = merlinView.knowledge().visiblePlayers().stream().map(player -> player.exactRoleId()).toList();
         assertEquals(2, merlinVisibleRoles.size());
@@ -38,6 +40,7 @@ class VisibilityServiceTest {
         assertTrue(merlinVisibleRoles.contains("ASSASSIN"));
 
         assertEquals(2, percivalView.knowledge().visiblePlayers().size());
+        assertTrue(percivalView.knowledge().visiblePlayers().stream().allMatch(player -> player.exactRoleId() == null));
         List<String> percivalCandidates = percivalView.knowledge().visiblePlayers().stream()
                 .flatMap(player -> player.candidateRoleIds().stream())
                 .distinct()
@@ -50,6 +53,9 @@ class VisibilityServiceTest {
 
         List<String> assassinVisibleRoles = assassinView.knowledge().visiblePlayers().stream().map(player -> player.exactRoleId()).toList();
         assertEquals(List.of("MORGANA"), assassinVisibleRoles);
+
+        List<String> morganaVisibleRoles = morganaView.knowledge().visiblePlayers().stream().map(player -> player.exactRoleId()).toList();
+        assertEquals(List.of("ASSASSIN"), morganaVisibleRoles);
     }
 
     private RoleAssignment assignmentByRole(GameRuntimeState state, String roleId) {

@@ -10,14 +10,18 @@ import com.example.avalon.core.role.model.RoleAssignment;
 import com.example.avalon.runtime.engine.VisibilityService;
 import com.example.avalon.runtime.model.GameRuntimeState;
 import com.example.avalon.runtime.model.PlayerRegistration;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 public class TurnContextBuilder {
     private final VisibilityService visibilityService;
     private final RuntimeCoreContextFactory contextFactory;
     private final com.example.avalon.core.game.rule.GameRuleEngine coreRuleEngine;
+    private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
     public TurnContextBuilder(VisibilityService visibilityService) {
         this(visibilityService, new RuntimeCoreContextFactory(), new com.example.avalon.core.game.rule.ClassicAvalonRuleEngine());
@@ -44,11 +48,25 @@ public class TurnContextBuilder {
                 assignment.roleId(),
                 publicSnapshot(state),
                 privateView,
-                PlayerMemoryState.empty(state.generatedGameId(), player.playerId(), assignment.roleId(), assignment.camp(), state.updatedAt()),
+                memoryState(state, player, assignment),
                 allowedActions,
                 state.runtimeRuleSetDefinition(),
                 state.runtimeSetupTemplate(),
                 "经典五人阿瓦隆");
+    }
+
+    private PlayerMemoryState memoryState(GameRuntimeState state,
+                                          PlayerRegistration player,
+                                          RoleAssignment assignment) {
+        Map<String, Object> payload = new LinkedHashMap<>(state.memoryOf(player.playerId()));
+        payload.putIfAbsent("gameId", state.generatedGameId());
+        payload.putIfAbsent("playerId", player.playerId());
+        payload.putIfAbsent("version", 0L);
+        payload.putIfAbsent("roleId", assignment.roleId());
+        payload.putIfAbsent("camp", assignment.camp().name());
+        payload.putIfAbsent("strategyMode", "NEUTRAL");
+        payload.putIfAbsent("updatedAt", state.updatedAt());
+        return objectMapper.convertValue(payload, PlayerMemoryState.class);
     }
 
     private PublicGameSnapshot publicSnapshot(GameRuntimeState state) {

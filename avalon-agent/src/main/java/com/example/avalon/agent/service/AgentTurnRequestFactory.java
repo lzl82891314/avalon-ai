@@ -4,10 +4,12 @@ import com.example.avalon.agent.model.AgentTurnRequest;
 import com.example.avalon.agent.model.ModelProfile;
 import com.example.avalon.agent.model.PlayerAgentConfig;
 import com.example.avalon.core.game.model.PlayerTurnContext;
+import com.example.avalon.core.player.memory.VisiblePlayerInfo;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -42,7 +44,20 @@ public class AgentTurnRequestFactory {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("camp", context.privateView().camp().name());
         payload.put("notes", context.privateView().knowledge().notes());
-        payload.put("visiblePlayers", context.privateView().knowledge().visiblePlayers());
+        payload.put("visiblePlayers", context.privateView().knowledge().visiblePlayers().stream()
+                .map(this::visiblePlayerPayload)
+                .toList());
+        return payload;
+    }
+
+    private Map<String, Object> visiblePlayerPayload(VisiblePlayerInfo visiblePlayer) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("playerId", visiblePlayer.playerId());
+        payload.put("seatNo", visiblePlayer.seatNo());
+        payload.put("displayName", visiblePlayer.displayName());
+        payload.put("exactRoleId", visiblePlayer.exactRoleId());
+        payload.put("camp", visiblePlayer.camp() == null ? null : visiblePlayer.camp().name());
+        payload.put("candidateRoleIds", List.copyOf(visiblePlayer.candidateRoleIds()));
         return payload;
     }
 

@@ -17,6 +17,16 @@ public class ValidationRetryPolicy {
     private static final int MIN_CORRECTIVE_MAX_TOKENS = 320;
     private static final int CORRECTIVE_TOKEN_INCREMENT = 320;
 
+    private final PrivateKnowledgeExpressionValidator privateKnowledgeExpressionValidator;
+
+    public ValidationRetryPolicy() {
+        this(new PrivateKnowledgeExpressionValidator());
+    }
+
+    ValidationRetryPolicy(PrivateKnowledgeExpressionValidator privateKnowledgeExpressionValidator) {
+        this.privateKnowledgeExpressionValidator = privateKnowledgeExpressionValidator;
+    }
+
     public ValidatedAgentTurn execute(PlayerTurnContext context,
                                       AgentTurnRequest request,
                                       AgentGateway agentGateway,
@@ -29,6 +39,7 @@ public class ValidationRetryPolicy {
                 AgentTurnResult result = agentGateway.playTurn(attemptRequest);
                 lastResult = result;
                 PlayerAction action = responseParser.parse(context, result);
+                privateKnowledgeExpressionValidator.validate(context, result);
                 return new ValidatedAgentTurn(result, action, attempts, attemptRequest.copy());
             } catch (RuntimeException exception) {
                 lastFailure = exception;
@@ -69,6 +80,19 @@ public class ValidationRetryPolicy {
     }
 
     private String correctivePrompt(RuntimeException failure, List<String> allowedActions) {
+        if (failure instanceof CandidateKnowledgeAssertionException knowledgeAssertionException) {
+            return """
+                    上一轮输出把候选身份说成了确定事实，请重新生成并严格遵守：
+                    - 只有 exactRoleId 明确告诉你的身份，才能写成确定事实
+                    - 对 candidateRoleIds 只能写“怀疑 / 可能 / 更像 / 倾向 / 猜测”，不能写“P5是梅林”“P3是莫甘娜”
+                    - 这条规则至少适用于 privateThought 和 auditReason.reasonSummary
+                    - action 仍然必须合法，且 %s
+                    - 违规片段：%s
+                    """.formatted(
+                    actionRequirement(allowedActions),
+                    knowledgeAssertionException.violationSummary()
+            ).strip();
+        }
         if (!(failure instanceof OpenAiCompatibleResponseException responseException)) {
             return null;
         }

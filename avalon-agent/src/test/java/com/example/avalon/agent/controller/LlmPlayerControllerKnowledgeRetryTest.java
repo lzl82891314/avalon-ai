@@ -1,14 +1,19 @@
-package com.example.avalon.agent.service;
+package com.example.avalon.agent.controller;
 
-import com.example.avalon.agent.model.AgentTurnRequest;
-import com.example.avalon.agent.model.ModelProfile;
+import com.example.avalon.agent.gateway.AgentGateway;
+import com.example.avalon.agent.model.AgentTurnResult;
 import com.example.avalon.agent.model.PlayerAgentConfig;
+import com.example.avalon.agent.service.AgentTurnRequestFactory;
+import com.example.avalon.agent.service.PromptBuilder;
+import com.example.avalon.agent.service.ResponseParser;
+import com.example.avalon.agent.service.ValidationRetryPolicy;
 import com.example.avalon.core.game.enums.Camp;
 import com.example.avalon.core.game.enums.GamePhase;
 import com.example.avalon.core.game.enums.GameStatus;
 import com.example.avalon.core.game.enums.PlayerActionType;
 import com.example.avalon.core.game.enums.PlayerConnectionState;
 import com.example.avalon.core.game.model.AllowedActionSet;
+import com.example.avalon.core.game.model.PlayerActionResult;
 import com.example.avalon.core.game.model.PlayerTurnContext;
 import com.example.avalon.core.game.model.PublicGameSnapshot;
 import com.example.avalon.core.game.model.PublicPlayerSummary;
@@ -28,83 +33,50 @@ import java.time.Instant;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class AgentTurnRequestFactoryTest {
-    private final AgentTurnRequestFactory factory = new AgentTurnRequestFactory();
-
+class LlmPlayerControllerKnowledgeRetryTest {
     @Test
-    void shouldPopulateProviderModelAndOptionsFromAgentConfig() {
-        PlayerAgentConfig agentConfig = new PlayerAgentConfig();
-        ModelProfile modelProfile = new ModelProfile();
-        modelProfile.setModelId("openai-gpt-5.2");
-        modelProfile.setProvider("openai");
-        modelProfile.setModelName("gpt-5.2");
-        modelProfile.setTemperature(0.3);
-        modelProfile.setMaxTokens(240);
-        modelProfile.setProviderOptions(Map.of(
-                "apiKeyEnv", "OPENAI_API_KEY",
-                "response_format", Map.of("type", "json_object")
-        ));
-        agentConfig.setModelProfile(modelProfile);
-        agentConfig.setOutputSchemaVersion("v2");
-
-        AgentTurnRequest request = factory.create(teamVoteContext(), agentConfig);
-
-        assertEquals("openai-gpt-5.2", request.getModelId());
-        assertEquals("openai", request.getProvider());
-        assertEquals("gpt-5.2", request.getModelName());
-        assertEquals(0.3, request.getTemperature());
-        assertEquals(240, request.getMaxTokens());
-        assertEquals("OPENAI_API_KEY", request.getProviderOptions().get("apiKeyEnv"));
-        assertEquals("v2", request.getOutputSchemaVersion());
-    }
-
-    @Test
-    void shouldDefaultToNoopProviderWhenModelProfileIsBlank() {
-        AgentTurnRequest request = factory.create(teamVoteContext(), new PlayerAgentConfig());
-
-        assertNull(request.getModelId());
-        assertEquals("noop", request.getProvider());
-        assertNull(request.getModelName());
-        assertNull(request.getTemperature());
-        assertNull(request.getMaxTokens());
-        assertEquals(Map.of(), request.getProviderOptions());
-    }
-
-    @Test
-    @SuppressWarnings("unchecked")
-    void shouldNormalizeVisiblePlayersIntoPlainMaps() {
-        AgentTurnRequest request = factory.create(percivalTeamVoteContext(), new PlayerAgentConfig());
-
-        List<Map<String, Object>> visiblePlayers = (List<Map<String, Object>>) request.getPrivateKnowledge().get("visiblePlayers");
-
-        assertEquals(2, visiblePlayers.size());
-        assertEquals("P3", visiblePlayers.get(0).get("playerId"));
-        assertEquals(List.of("MERLIN", "MORGANA"), visiblePlayers.get(0).get("candidateRoleIds"));
-        assertNull(visiblePlayers.get(0).get("exactRoleId"));
-    }
-
-    private PlayerTurnContext teamVoteContext() {
-        return teamVoteContext(
-                "MERLIN",
-                new PlayerPrivateKnowledge(List.of(), List.of())
+    void shouldRetryWhenCandidateOnlyKnowledgeIsAssertedAsFact() {
+        AtomicInteger calls = new AtomicInteger();
+        AgentGateway agentGateway = request -> {
+            AgentTurnResult result = new AgentTurnResult();
+            result.setActionJson("{\"actionType\":\"TEAM_VOTE\",\"vote\":\"APPROVE\"}");
+            if (calls.incrementAndGet() == 1) {
+                result.setPrivateThought("P5是梅林，P3是莫甘娜。");
+                return result;
+            }
+            assertTrue(request.getPromptText().contains("候选身份说成了确定事实"));
+            result.setPrivateThought("我怀疑 P5 更像梅林。");
+            return result;
+        };
+        LlmPlayerController controller = new LlmPlayerController(
+                agentGateway,
+                new AgentTurnRequestFactory(),
+                new PromptBuilder(),
+                new ResponseParser(),
+                new ValidationRetryPolicy(),
+                new PlayerAgentConfig()
         );
+
+        PlayerActionResult result = controller.act(percivalTeamVoteContext());
+
+        assertEquals(2, result.rawMetadata().get("attempts"));
+        Map<String, Object> inputContext = rawMap(result.rawMetadata().get("inputContext"));
+        assertTrue(String.valueOf(inputContext.get("promptText")).contains("candidateRoleIds"));
+        assertTrue(String.valueOf(inputContext.get("promptText")).contains("候选身份说成了确定事实"));
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> rawMap(Object value) {
+        return assertInstanceOf(Map.class, value);
     }
 
     private PlayerTurnContext percivalTeamVoteContext() {
-        return teamVoteContext(
-                "PERCIVAL",
-                new PlayerPrivateKnowledge(List.of(
-                        new VisiblePlayerInfo("P3", 3, "Cara", null, Camp.GOOD, List.of("MERLIN", "MORGANA")),
-                        new VisiblePlayerInfo("P5", 5, "Eva", null, Camp.GOOD, List.of("MERLIN", "MORGANA"))
-                ), List.of("You see Merlin and Morgana as candidates."))
-        );
-    }
-
-    private PlayerTurnContext teamVoteContext(String roleId, PlayerPrivateKnowledge privateKnowledge) {
         RuleSetDefinition ruleSetDefinition = new RuleSetDefinition(
                 "avalon-classic-5p-v1",
                 "Avalon Classic 5 Players",
@@ -130,7 +102,7 @@ class AgentTurnRequestFactoryTest {
                 GamePhase.TEAM_VOTE.name(),
                 "P1",
                 1,
-                roleId,
+                "PERCIVAL",
                 new PublicGameSnapshot(
                         "game-1",
                         GameStatus.RUNNING,
@@ -153,12 +125,15 @@ class AgentTurnRequestFactoryTest {
                         "game-1",
                         "P1",
                         1,
-                        roleId,
+                        "PERCIVAL",
                         Camp.GOOD,
-                        privateKnowledge,
+                        new PlayerPrivateKnowledge(List.of(
+                                new VisiblePlayerInfo("P3", 3, "Cara", null, Camp.GOOD, List.of("MERLIN", "MORGANA")),
+                                new VisiblePlayerInfo("P5", 5, "Eva", null, Camp.GOOD, List.of("MERLIN", "MORGANA"))
+                        ), List.of("You see Merlin and Morgana as candidates.")),
                         List.of()
                 ),
-                PlayerMemoryState.empty("game-1", "P1", roleId, Camp.GOOD, Instant.parse("2026-03-24T00:00:00Z")),
+                PlayerMemoryState.empty("game-1", "P1", "PERCIVAL", Camp.GOOD, Instant.parse("2026-03-24T00:00:00Z")),
                 new AllowedActionSet("game-1", "P1", 1, EnumSet.of(PlayerActionType.TEAM_VOTE)),
                 ruleSetDefinition,
                 new SetupTemplate("classic-5p-v1", 5, true, List.of("MERLIN", "PERCIVAL", "LOYAL_SERVANT", "MORGANA", "ASSASSIN")),

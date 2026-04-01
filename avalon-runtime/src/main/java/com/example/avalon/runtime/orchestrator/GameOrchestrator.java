@@ -15,6 +15,7 @@ import com.example.avalon.core.game.model.TeamProposalAction;
 import com.example.avalon.core.game.model.TeamVoteAction;
 import com.example.avalon.core.player.controller.PlayerController;
 import com.example.avalon.core.player.controller.PlayerActionGenerationException;
+import com.example.avalon.core.player.memory.PlayerMemoryState;
 import com.example.avalon.core.player.enums.PlayerControllerType;
 import com.example.avalon.core.role.model.RoleAssignment;
 import com.example.avalon.runtime.controller.PlayerControllerResolver;
@@ -31,7 +32,10 @@ import com.example.avalon.runtime.service.GameSessionService;
 import com.example.avalon.runtime.service.ResolvedLlmConfigInitializer;
 import com.example.avalon.runtime.service.SeededLeaderSelector;
 import com.example.avalon.runtime.service.TurnContextBuilder;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -46,6 +50,7 @@ public class GameOrchestrator {
     private final TurnContextBuilder turnContextBuilder;
     private final PlayerControllerResolver controllerResolver;
     private final ResolvedLlmConfigInitializer resolvedLlmConfigInitializer;
+    private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
     public GameOrchestrator() {
         this(new GameSessionService(),
@@ -322,6 +327,7 @@ public class GameOrchestrator {
             payload.put("auditReason", result.auditReason());
         }
         state.appendEvent("PLAYER_ACTION", state.phase(), player.playerId(), payload);
+        applyMemoryUpdate(state, player, result);
         RuntimeAuditEntry auditEntry = toAuditEntry(state.events().get(state.events().size() - 1), player, result);
         if (auditEntry != null) {
             state.appendAudit(auditEntry);
@@ -363,6 +369,8 @@ public class GameOrchestrator {
                 mapValue(rawMetadata.get("rawModelResponse")),
                 mapValue(rawMetadata.get("parsedAction")),
                 mapValue(rawMetadata.get("auditReason")),
+                listOfMapsValue(rawMetadata.get("executionTrace")),
+                mapValue(rawMetadata.get("policySummary")),
                 failedValidation(rawMetadata, exception),
                 exception.getMessage(),
                 pauseEvent.createdAt()
@@ -385,6 +393,8 @@ public class GameOrchestrator {
                 mapValue(rawMetadata.get("rawModelResponse")),
                 parsedAction(result.action()),
                 auditReason(result),
+                listOfMapsValue(rawMetadata.get("executionTrace")),
+                mapValue(rawMetadata.get("policySummary")),
                 mapValue(rawMetadata.get("validation")),
                 stringValue(rawMetadata.get("errorMessage")),
                 event.createdAt()
@@ -416,6 +426,22 @@ public class GameOrchestrator {
         }
         String string = String.valueOf(value);
         return string.isBlank() ? null : string;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> listOfMapsValue(Object value) {
+        if (!(value instanceof List<?> list)) {
+            return List.of();
+        }
+        List<Map<String, Object>> copied = new ArrayList<>();
+        for (Object item : list) {
+            if (item instanceof Map<?, ?> map) {
+                Map<String, Object> nested = new LinkedHashMap<>();
+                map.forEach((key, nestedValue) -> nested.put(String.valueOf(key), nestedValue));
+                copied.add(nested);
+            }
+        }
+        return List.copyOf(copied);
     }
 
     private Map<String, Object> parsedAction(PlayerAction action) {
@@ -450,6 +476,28 @@ public class GameOrchestrator {
         payload.put("valid", false);
         putIfAbsent(payload, "errorMessage", exception.getMessage());
         return payload;
+    }
+
+    private void applyMemoryUpdate(GameRuntimeState state, PlayerRegistration player, PlayerActionResult result) {
+        if (result.memoryUpdate() == null) {
+            return;
+        }
+        RoleAssignment assignment = state.roleAssignmentByPlayerId(player.playerId());
+        Map<String, Object> payload = new LinkedHashMap<>(state.memoryOf(player.playerId()));
+        payload.putIfAbsent("gameId", state.generatedGameId());
+        payload.putIfAbsent("playerId", player.playerId());
+        payload.putIfAbsent("version", 0L);
+        payload.putIfAbsent("roleId", assignment.roleId());
+        payload.putIfAbsent("camp", assignment.camp().name());
+        payload.putIfAbsent("beliefsByPlayerId", Map.of());
+        payload.putIfAbsent("strategyMode", "NEUTRAL");
+        payload.putIfAbsent("updatedAt", state.updatedAt());
+        PlayerMemoryState current = objectMapper.convertValue(payload, PlayerMemoryState.class);
+        PlayerMemoryState merged = current.merge(result.memoryUpdate(), Instant.now());
+        state.memoryByPlayerId().put(
+                player.playerId(),
+                objectMapper.convertValue(merged, new TypeReference<Map<String, Object>>() { })
+        );
     }
 
     private void putIfAbsent(Map<String, Object> payload, String key, Object value) {

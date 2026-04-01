@@ -9,6 +9,7 @@ public record MemoryUpdate(
         List<String> observationsToAdd,
         List<String> commitmentsToAdd,
         List<String> inferredFactsToAdd,
+        Map<String, PlayerBeliefState> beliefsToUpsert,
         String strategyMode,
         String lastSummary
 ) {
@@ -18,6 +19,6 @@ public record MemoryUpdate(
         observationsToAdd = observationsToAdd == null ? List.of() : List.copyOf(observationsToAdd);
         commitmentsToAdd = commitmentsToAdd == null ? List.of() : List.copyOf(commitmentsToAdd);
         inferredFactsToAdd = inferredFactsToAdd == null ? List.of() : List.copyOf(inferredFactsToAdd);
+        beliefsToUpsert = beliefsToUpsert == null ? Map.of() : Map.copyOf(beliefsToUpsert);
     }
 }
-

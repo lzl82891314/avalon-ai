@@ -2,6 +2,8 @@ package com.example.avalon.agent.gateway;
 
 import com.example.avalon.agent.model.AgentTurnRequest;
 import com.example.avalon.agent.model.AgentTurnResult;
+import com.example.avalon.agent.model.StructuredInferenceRequest;
+import com.example.avalon.agent.model.StructuredInferenceResult;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -84,6 +86,37 @@ class OpenAiChatCompletionsGatewayTest {
         assertEquals(45L, result.getModelMetadata().getOutputTokens());
         assertEquals("openai-compatible", result.getModelMetadata().getAttributes().get("gatewayType"));
         assertEquals("stop", result.getModelMetadata().getAttributes().get("finishReason"));
+        assertEquals("json_object", result.getModelMetadata().getAttributes().get("assistantContentShape"));
+    }
+
+    @Test
+    void shouldParseStructuredInferencePayload() {
+        OpenAiChatCompletionsGateway gateway = new OpenAiChatCompletionsGateway(
+                (uri, headers, requestBody, timeout) -> json("""
+                        {
+                          "id":"chatcmpl-structured",
+                          "model":"gpt-5.2",
+                          "usage":{"prompt_tokens":21,"completion_tokens":12},
+                          "choices":[
+                            {
+                              "finish_reason":"stop",
+                              "message":{
+                                "content":"{\\"beliefsByPlayerId\\":{\\"P2\\":{\\"firstOrderEvilScore\\":0.81,\\"secondOrderAwarenessScore\\":0.45,\\"thirdOrderManipulationRisk\\":0.62,\\"confidence\\":0.77}},\\"strategyMode\\":\\"PRESSURE_TEST\\",\\"lastSummary\\":\\"P2 需要持续施压\\",\\"observationsToAdd\\":[\\"P2 投票偏激进\\"],\\"inferredFactsToAdd\\":[\\"P2 可能在试探我\\"]}"
+                              }
+                            }
+                          ]
+                        }
+                        """),
+                name -> null
+        );
+
+        StructuredInferenceResult result = gateway.infer(structuredRequest("openai"));
+
+        assertEquals(0.81, result.getPayload().path("beliefsByPlayerId").path("P2").path("firstOrderEvilScore").asDouble());
+        assertEquals("PRESSURE_TEST", result.getPayload().path("strategyMode").asText());
+        assertTrue(result.getRawJson().contains("beliefsByPlayerId"));
+        assertEquals(21L, result.getModelMetadata().getInputTokens());
+        assertEquals(12L, result.getModelMetadata().getOutputTokens());
         assertEquals("json_object", result.getModelMetadata().getAttributes().get("assistantContentShape"));
     }
 
@@ -510,6 +543,22 @@ class OpenAiChatCompletionsGatewayTest {
                 "timeoutMillis", 1500,
                 "response_format", Map.of("type", "json_object"),
                 "seed", 7
+        ));
+        return request;
+    }
+
+    private StructuredInferenceRequest structuredRequest(String provider) {
+        StructuredInferenceRequest request = new StructuredInferenceRequest();
+        request.setProvider(provider);
+        request.setModelName("gpt-5.2");
+        request.setTemperature(0.1);
+        request.setMaxTokens(220);
+        request.setDeveloperPrompt("Return JSON only.");
+        request.setUserPrompt("Build tom beliefs for this turn.");
+        request.setProviderOptions(Map.of(
+                "apiKey", "test-key",
+                "baseUrl", "https://api.openai.test/v1",
+                "response_format", Map.of("type", "json_object")
         ));
         return request;
     }

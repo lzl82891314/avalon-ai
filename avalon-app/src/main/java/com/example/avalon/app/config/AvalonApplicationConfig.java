@@ -7,6 +7,7 @@ import com.example.avalon.agent.model.PlayerAgentConfig;
 import com.example.avalon.agent.service.AgentTurnRequestFactory;
 import com.example.avalon.agent.service.PromptBuilder;
 import com.example.avalon.agent.service.ResponseParser;
+import com.example.avalon.agent.service.TurnAgent;
 import com.example.avalon.agent.service.ValidationRetryPolicy;
 import com.example.avalon.api.service.LlmSelectionResolutionService;
 import com.example.avalon.api.service.SeedGenerator;
@@ -81,7 +82,7 @@ public class AvalonApplicationConfig {
 
     @Bean
     PlayerControllerResolver playerControllerResolver(
-            AgentGateway agentGateway,
+            TurnAgent turnAgent,
             AgentTurnRequestFactory agentTurnRequestFactory,
             PromptBuilder promptBuilder,
             ResponseParser responseParser,
@@ -90,7 +91,7 @@ public class AvalonApplicationConfig {
         ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
         PlayerControllerResolver resolver = new PlayerControllerResolver();
         resolver.registerFactory(PlayerControllerType.LLM, (state, player) -> new LlmPlayerController(
-                agentGateway,
+                turnAgent,
                 agentTurnRequestFactory,
                 promptBuilder,
                 responseParser,

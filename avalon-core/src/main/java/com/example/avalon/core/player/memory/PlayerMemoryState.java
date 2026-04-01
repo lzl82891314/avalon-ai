@@ -19,6 +19,7 @@ public record PlayerMemoryState(
         List<String> observations,
         List<String> commitments,
         List<String> inferredFacts,
+        Map<String, PlayerBeliefState> beliefsByPlayerId,
         String strategyMode,
         String lastSummary,
         Instant updatedAt
@@ -29,6 +30,7 @@ public record PlayerMemoryState(
         observations = observations == null ? List.of() : List.copyOf(observations);
         commitments = commitments == null ? List.of() : List.copyOf(commitments);
         inferredFacts = inferredFacts == null ? List.of() : List.copyOf(inferredFacts);
+        beliefsByPlayerId = beliefsByPlayerId == null ? Map.of() : Map.copyOf(beliefsByPlayerId);
     }
 
     public static PlayerMemoryState empty(String gameId, String playerId, String roleId, Camp camp, Instant now) {
@@ -43,6 +45,7 @@ public record PlayerMemoryState(
                 List.of(),
                 List.of(),
                 List.of(),
+                Map.of(),
                 "NEUTRAL",
                 null,
                 now
@@ -65,6 +68,13 @@ public record PlayerMemoryState(
         List<String> nextFacts = new ArrayList<>(inferredFacts);
         nextFacts.addAll(update.inferredFactsToAdd());
 
+        Map<String, PlayerBeliefState> nextBeliefs = new LinkedHashMap<>(beliefsByPlayerId);
+        update.beliefsToUpsert().forEach((playerId, beliefState) -> {
+            if (playerId != null && !playerId.isBlank() && beliefState != null) {
+                nextBeliefs.put(playerId, beliefState);
+            }
+        });
+
         return new PlayerMemoryState(
                 gameId,
                 playerId,
@@ -76,10 +86,10 @@ public record PlayerMemoryState(
                 nextObservations,
                 nextCommitments,
                 nextFacts,
+                nextBeliefs,
                 update.strategyMode() == null ? strategyMode : update.strategyMode(),
                 update.lastSummary() == null ? lastSummary : update.lastSummary(),
                 now
         );
     }
 }
-

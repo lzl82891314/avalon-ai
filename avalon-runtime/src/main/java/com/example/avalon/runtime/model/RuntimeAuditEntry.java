@@ -3,6 +3,7 @@ package com.example.avalon.runtime.model;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 public record RuntimeAuditEntry(
@@ -14,6 +15,8 @@ public record RuntimeAuditEntry(
         Map<String, Object> rawModelResponse,
         Map<String, Object> parsedAction,
         Map<String, Object> auditReason,
+        List<Map<String, Object>> executionTrace,
+        Map<String, Object> policySummary,
         Map<String, Object> validationResult,
         String errorMessage,
         Instant createdAt
@@ -24,6 +27,8 @@ public record RuntimeAuditEntry(
         rawModelResponse = copy(rawModelResponse);
         parsedAction = copy(parsedAction);
         auditReason = copy(auditReason);
+        executionTrace = executionTrace == null ? List.of() : executionTrace.stream().map(RuntimeAuditEntry::copy).toList();
+        policySummary = copy(policySummary);
         validationResult = copy(validationResult);
     }
 

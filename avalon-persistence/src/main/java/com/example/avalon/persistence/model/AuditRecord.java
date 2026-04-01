@@ -13,6 +13,8 @@ public record AuditRecord(
         String rawModelResponseJson,
         String parsedActionJson,
         String auditReasonJson,
+        String executionTraceJson,
+        String policySummaryJson,
         String validationResultJson,
         String errorMessage,
         Instant createdAt
@@ -22,7 +24,8 @@ public record AuditRecord(
         rawModelResponseJson = rawModelResponseJson == null ? "{}" : rawModelResponseJson;
         parsedActionJson = parsedActionJson == null ? "{}" : parsedActionJson;
         auditReasonJson = auditReasonJson == null ? "{}" : auditReasonJson;
+        executionTraceJson = executionTraceJson == null ? "[]" : executionTraceJson;
+        policySummaryJson = policySummaryJson == null ? "{}" : policySummaryJson;
         validationResultJson = validationResultJson == null ? "{}" : validationResultJson;
     }
 }
-

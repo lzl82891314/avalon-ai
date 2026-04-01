@@ -11,6 +11,9 @@ public class AgentTurnRequest {
     private String playerId;
     private Integer seatNo;
     private String roleId;
+    private String agentPolicyId;
+    private String strategyProfileId;
+    private String modelSlotId;
     private String modelId;
     private String provider;
     private String modelName;
@@ -71,6 +74,30 @@ public class AgentTurnRequest {
 
     public void setRoleId(String roleId) {
         this.roleId = roleId;
+    }
+
+    public String getAgentPolicyId() {
+        return agentPolicyId;
+    }
+
+    public void setAgentPolicyId(String agentPolicyId) {
+        this.agentPolicyId = agentPolicyId;
+    }
+
+    public String getStrategyProfileId() {
+        return strategyProfileId;
+    }
+
+    public void setStrategyProfileId(String strategyProfileId) {
+        this.strategyProfileId = strategyProfileId;
+    }
+
+    public String getModelSlotId() {
+        return modelSlotId;
+    }
+
+    public void setModelSlotId(String modelSlotId) {
+        this.modelSlotId = modelSlotId;
     }
 
     public String getModelId() {
@@ -185,6 +212,9 @@ public class AgentTurnRequest {
         copy.setPlayerId(playerId);
         copy.setSeatNo(seatNo);
         copy.setRoleId(roleId);
+        copy.setAgentPolicyId(agentPolicyId);
+        copy.setStrategyProfileId(strategyProfileId);
+        copy.setModelSlotId(modelSlotId);
         copy.setModelId(modelId);
         copy.setProvider(provider);
         copy.setModelName(modelName);

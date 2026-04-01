@@ -5,6 +5,8 @@ import com.example.avalon.agent.model.AgentTurnResult;
 import com.example.avalon.agent.model.AuditReason;
 import com.example.avalon.agent.model.MemoryUpdate;
 import com.example.avalon.agent.model.RawCompletionMetadata;
+import com.example.avalon.agent.model.StructuredInferenceRequest;
+import com.example.avalon.agent.model.StructuredInferenceResult;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -21,7 +23,7 @@ import java.util.Map;
 import java.util.function.Function;
 
 @Component
-public class OpenAiChatCompletionsGateway implements AgentGateway {
+public class OpenAiChatCompletionsGateway implements ModelGateway, StructuredModelGateway {
     private static final String GATEWAY_TYPE = "openai-compatible";
     private static final String DEFAULT_MODEL = "gpt-5.2";
     private static final String OPTIONAL_SECTION_WARNINGS = "optionalSectionWarnings";
@@ -54,19 +56,52 @@ public class OpenAiChatCompletionsGateway implements AgentGateway {
 
     @Override
     public AgentTurnResult playTurn(AgentTurnRequest request) {
-        RequestSettings settings = requestSettings(request);
+        RequestSettings settings = requestSettings(request.getProvider(), request.getModelId(), request.getProviderOptions());
         JsonNode response;
         try {
             response = transport.postChatCompletion(
                     OpenAiCompatibleSupport.endpointUri(settings.baseUrl()),
                     headers(settings),
-                    requestBody(request),
+                    requestBody(
+                            request.getProvider(),
+                            request.getModelName(),
+                            request.getTemperature(),
+                            request.getMaxTokens(),
+                            request.getProviderOptions(),
+                            developerPrompt(request),
+                            request.getPromptText()
+                    ),
                     settings.timeout()
             );
         } catch (RuntimeException exception) {
-            throw transportException(request, exception);
+            throw transportException(request.getProvider(), request.getModelId(), request.getModelName(), exception);
         }
         return parseResponse(request, response);
+    }
+
+    @Override
+    public StructuredInferenceResult infer(StructuredInferenceRequest request) {
+        RequestSettings settings = requestSettings(request.getProvider(), request.getModelId(), request.getProviderOptions());
+        JsonNode response;
+        try {
+            response = transport.postChatCompletion(
+                    OpenAiCompatibleSupport.endpointUri(settings.baseUrl()),
+                    headers(settings),
+                    requestBody(
+                            request.getProvider(),
+                            request.getModelName(),
+                            request.getTemperature(),
+                            request.getMaxTokens(),
+                            request.getProviderOptions(),
+                            request.getDeveloperPrompt(),
+                            request.getUserPrompt()
+                    ),
+                    settings.timeout()
+            );
+        } catch (RuntimeException exception) {
+            throw transportException(request.getProvider(), request.getModelId(), request.getModelName(), exception);
+        }
+        return parseStructuredResponse(request, response);
     }
 
     private Map<String, String> headers(RequestSettings settings) {
@@ -81,24 +116,30 @@ public class OpenAiChatCompletionsGateway implements AgentGateway {
         return headers;
     }
 
-    private String requestBody(AgentTurnRequest request) {
+    private String requestBody(String provider,
+                               String modelName,
+                               Double temperature,
+                               Integer maxTokens,
+                               Map<String, Object> requestProviderOptions,
+                               String developerPrompt,
+                               String userPrompt) {
         Map<String, Object> providerOptions = OpenAiCompatibleSupport.effectiveProviderOptions(
-                request.getProvider(),
-                request.getProviderOptions()
+                provider,
+                requestProviderOptions
         );
         ObjectNode root = objectMapper.createObjectNode();
-        root.put("model", defaultModel(request.getModelName()));
+        root.put("model", defaultModel(modelName));
         ArrayNode messages = root.putArray("messages");
         messages.addObject()
-                .put("role", OpenAiCompatibleSupport.instructionRole(request.getProvider(), providerOptions))
-                .put("content", developerPrompt(request));
+                .put("role", OpenAiCompatibleSupport.instructionRole(provider, providerOptions))
+                .put("content", developerPrompt == null ? "" : developerPrompt);
         messages.addObject()
                 .put("role", "user")
-                .put("content", request.getPromptText());
-        if (request.getTemperature() != null) {
-            root.put("temperature", request.getTemperature());
+                .put("content", userPrompt == null ? "" : userPrompt);
+        if (temperature != null) {
+            root.put("temperature", temperature);
         }
-        int effectiveMaxTokens = OpenAiCompatibleSupport.effectiveMaxTokens(request.getProvider(), request.getMaxTokens());
+        int effectiveMaxTokens = OpenAiCompatibleSupport.effectiveMaxTokens(provider, maxTokens);
         if (effectiveMaxTokens > 0) {
             root.put("max_completion_tokens", effectiveMaxTokens);
         }
@@ -143,7 +184,7 @@ public class OpenAiChatCompletionsGateway implements AgentGateway {
             if (memoryUpdate.value() != null) {
                 result.setMemoryUpdate(memoryUpdate.value());
             }
-            RawCompletionMetadata metadata = metadata(request, response, choice, analysis);
+            RawCompletionMetadata metadata = metadata(request.getProvider(), request.getModelName(), response, choice, analysis);
             List<Map<String, Object>> optionalSectionWarnings = new ArrayList<>();
             optionalSectionWarnings.addAll(auditReason.warnings());
             optionalSectionWarnings.addAll(memoryUpdate.warnings());
@@ -154,6 +195,31 @@ public class OpenAiChatCompletionsGateway implements AgentGateway {
             return result;
         } catch (RuntimeException exception) {
             throw responseException(request, response, choice, analysis, exception);
+        }
+    }
+
+    private StructuredInferenceResult parseStructuredResponse(StructuredInferenceRequest request, JsonNode response) {
+        JsonNode choice = response.path("choices").path(0);
+        if (choice.isMissingNode()) {
+            throw new IllegalStateException("OpenAI-compatible response did not include any choices");
+        }
+
+        JsonNode message = choice.path("message");
+        String refusal = textOrNull(message.path("refusal"));
+        if (refusal != null) {
+            throw new IllegalStateException("OpenAI-compatible completion refused the request: " + refusal);
+        }
+
+        OpenAiCompatibleMessageAnalysis analysis = OpenAiCompatibleSupport.analyzeAssistantMessage(message);
+        try {
+            JsonNode payload = OpenAiCompatibleSupport.readJson(objectMapper, analysis);
+            StructuredInferenceResult result = new StructuredInferenceResult();
+            result.setPayload(payload);
+            result.setRawJson(writeJson(payload));
+            result.setModelMetadata(metadata(request.getProvider(), request.getModelName(), response, choice, analysis));
+            return result;
+        } catch (RuntimeException exception) {
+            throw responseException(request.getProvider(), request.getModelName(), response, choice, analysis, exception);
         }
     }
 
@@ -203,13 +269,14 @@ public class OpenAiChatCompletionsGateway implements AgentGateway {
         return warning;
     }
 
-    private RawCompletionMetadata metadata(AgentTurnRequest request,
+    private RawCompletionMetadata metadata(String provider,
+                                           String modelName,
                                            JsonNode response,
                                            JsonNode choice,
                                            OpenAiCompatibleMessageAnalysis analysis) {
         RawCompletionMetadata metadata = new RawCompletionMetadata();
-        metadata.setProvider(providerId(request));
-        metadata.setModelName(textOrFallback(response.path("model"), defaultModel(request.getModelName())));
+        metadata.setProvider(providerId(provider));
+        metadata.setModelName(textOrFallback(response.path("model"), defaultModel(modelName)));
         metadata.setInputTokens(longOrNull(response.path("usage").path("prompt_tokens")));
         metadata.setOutputTokens(longOrNull(response.path("usage").path("completion_tokens")));
 
@@ -226,18 +293,17 @@ public class OpenAiChatCompletionsGateway implements AgentGateway {
         return metadata;
     }
 
-    private RequestSettings requestSettings(AgentTurnRequest request) {
-        Map<String, Object> providerOptions = request.getProviderOptions();
-        String apiKey = apiKeyResolver.resolveApiKey(request.getModelId(), providerOptions);
+    private RequestSettings requestSettings(String provider, String modelId, Map<String, Object> providerOptions) {
+        String apiKey = apiKeyResolver.resolveApiKey(modelId, providerOptions);
         if (apiKey == null || apiKey.isBlank()) {
             throw new IllegalStateException(
-                    ModelProfileSecretSupport.missingApiKeyMessage(providerId(request), request.getModelId())
+                    ModelProfileSecretSupport.missingApiKeyMessage(providerId(provider), modelId)
             );
         }
         String baseUrl = OpenAiCompatibleSupport.stringOption(providerOptions, "baseUrl");
         String organization = OpenAiCompatibleSupport.stringOption(providerOptions, "organization");
         String project = OpenAiCompatibleSupport.stringOption(providerOptions, "project");
-        Duration timeout = timeout(request.getProvider(), providerOptions.get("timeoutMillis"));
+        Duration timeout = timeout(provider, providerOptions.get("timeoutMillis"));
         return new RequestSettings(
                 baseUrl == null || baseUrl.isBlank() ? OpenAiCompatibleSupport.DEFAULT_BASE_URL : baseUrl,
                 apiKey,
@@ -255,14 +321,23 @@ public class OpenAiChatCompletionsGateway implements AgentGateway {
         return modelName == null || modelName.isBlank() ? DEFAULT_MODEL : modelName;
     }
 
-    private String providerId(AgentTurnRequest request) {
-        if (request == null) {
+    private String providerId(String provider) {
+        if (provider == null) {
             return "openai";
         }
-        return OpenAiCompatibleSupport.providerId(request.getProvider());
+        return OpenAiCompatibleSupport.providerId(provider);
     }
 
     private OpenAiCompatibleResponseException responseException(AgentTurnRequest request,
+                                                                JsonNode response,
+                                                                JsonNode choice,
+                                                                OpenAiCompatibleMessageAnalysis analysis,
+                                                                RuntimeException exception) {
+        return responseException(request.getProvider(), request.getModelName(), response, choice, analysis, exception);
+    }
+
+    private OpenAiCompatibleResponseException responseException(String provider,
+                                                                String modelName,
                                                                 JsonNode response,
                                                                 JsonNode choice,
                                                                 OpenAiCompatibleMessageAnalysis analysis,
@@ -280,14 +355,17 @@ public class OpenAiChatCompletionsGateway implements AgentGateway {
         return new OpenAiCompatibleResponseException(
                 message,
                 exception,
-                providerId(request),
-                textOrFallback(response.path("model"), defaultModel(request.getModelName())),
+                providerId(provider),
+                textOrFallback(response.path("model"), defaultModel(modelName)),
                 finishReason,
                 analysis
         );
     }
 
-    private OpenAiCompatibleResponseException transportException(AgentTurnRequest request, RuntimeException exception) {
+    private OpenAiCompatibleResponseException transportException(String provider,
+                                                                 String modelId,
+                                                                 String modelName,
+                                                                 RuntimeException exception) {
         if (exception instanceof OpenAiCompatibleResponseException compatibleResponseException) {
             return compatibleResponseException;
         }
@@ -297,8 +375,8 @@ public class OpenAiChatCompletionsGateway implements AgentGateway {
         return new OpenAiCompatibleResponseException(
                 exception.getMessage() == null ? "OpenAI-compatible HTTP transport failed" : exception.getMessage(),
                 exception,
-                providerId(request),
-                defaultModel(request.getModelName()),
+                providerId(provider),
+                defaultModel(modelName),
                 null,
                 null,
                 diagnostics
@@ -323,7 +401,7 @@ public class OpenAiChatCompletionsGateway implements AgentGateway {
                 - 如果在 privateThought 或 auditReason.reasonSummary 中提到 candidateRoleIds，只能使用“怀疑 / 可能 / 更像 / 倾向 / 猜测”等不确定表达。
                 - 绝不能写“P5是梅林”“P3就是莫甘娜”这类确定断言。
                 """.strip());
-        if ("minimax".equals(providerId(request))) {
+        if ("minimax".equals(providerId(request.getProvider()))) {
             builder.append(System.lineSeparator())
                     .append("""
                             当前 provider 的兼容要求更严格：
@@ -332,6 +410,14 @@ public class OpenAiChatCompletionsGateway implements AgentGateway {
                             """.strip());
         }
         return builder.toString();
+    }
+
+    private String writeJson(JsonNode payload) {
+        try {
+            return objectMapper.writeValueAsString(payload);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Failed to serialize structured inference payload", exception);
+        }
     }
 
     private String textOrNull(JsonNode node) {

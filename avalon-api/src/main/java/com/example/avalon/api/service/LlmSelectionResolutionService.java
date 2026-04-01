@@ -107,6 +107,9 @@ public class LlmSelectionResolutionService implements ResolvedLlmConfigInitializ
         modelProfile.setMaxTokens(profile.maxTokens());
         modelProfile.setProviderOptions(profile.providerOptions());
         config.setModelProfile(modelProfile);
+        Map<String, ModelProfile> modelSlots = new LinkedHashMap<>(config.getModelSlots());
+        modelSlots.put("actor", modelProfile);
+        config.setModelSlots(modelSlots);
         return objectMapper.convertValue(config, new TypeReference<Map<String, Object>>() { });
     }
 }

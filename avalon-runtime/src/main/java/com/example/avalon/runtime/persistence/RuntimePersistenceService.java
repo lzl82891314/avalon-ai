@@ -166,6 +166,8 @@ public class RuntimePersistenceService {
                 writeJson(entry.rawModelResponse()),
                 writeJson(entry.parsedAction()),
                 writeJson(entry.auditReason()),
+                writeJson(entry.executionTrace()),
+                writeJson(entry.policySummary()),
                 writeJson(entry.validationResult()),
                 entry.errorMessage(),
                 entry.createdAt()

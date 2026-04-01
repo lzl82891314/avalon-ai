@@ -1,7 +1,7 @@
 package com.example.avalon.agent.gateway;
 
-import com.example.avalon.agent.model.AgentTurnRequest;
-import com.example.avalon.agent.model.AgentTurnResult;
+import com.example.avalon.agent.model.StructuredInferenceRequest;
+import com.example.avalon.agent.model.StructuredInferenceResult;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
@@ -12,7 +12,7 @@ import java.util.Set;
 
 @Primary
 @Component
-public class RoutingAgentGateway implements AgentGateway {
+public class RoutingStructuredModelGateway implements StructuredModelGateway {
     private static final List<String> OPENAI_COMPATIBLE_PROVIDER_IDS = List.of(
             "openai",
             "minimax",
@@ -22,28 +22,28 @@ public class RoutingAgentGateway implements AgentGateway {
     );
     private static final Set<String> OPENAI_COMPATIBLE_PROVIDERS = Set.copyOf(OPENAI_COMPATIBLE_PROVIDER_IDS);
 
-    private final ModelGateway noopGateway;
-    private final ModelGateway openAiGateway;
+    private final StructuredModelGateway noopGateway;
+    private final StructuredModelGateway openAiGateway;
 
     @Autowired
-    public RoutingAgentGateway(NoopAgentGateway noopGateway, OpenAiChatCompletionsGateway openAiGateway) {
+    public RoutingStructuredModelGateway(NoopAgentGateway noopGateway, OpenAiChatCompletionsGateway openAiGateway) {
         this.noopGateway = noopGateway;
         this.openAiGateway = openAiGateway;
     }
 
-    RoutingAgentGateway(ModelGateway noopGateway, ModelGateway openAiGateway) {
+    RoutingStructuredModelGateway(StructuredModelGateway noopGateway, StructuredModelGateway openAiGateway) {
         this.noopGateway = noopGateway;
         this.openAiGateway = openAiGateway;
     }
 
     @Override
-    public AgentTurnResult playTurn(AgentTurnRequest request) {
+    public StructuredInferenceResult infer(StructuredInferenceRequest request) {
         String provider = normalizedProvider(request.getProvider());
         if (provider == null || "noop".equals(provider)) {
-            return noopGateway.playTurn(request);
+            return noopGateway.infer(request);
         }
         if (OPENAI_COMPATIBLE_PROVIDERS.contains(provider)) {
-            return openAiGateway.playTurn(request);
+            return openAiGateway.infer(request);
         }
         throw new IllegalStateException(
                 "Unsupported LLM provider '" + request.getProvider() + "'. Supported providers: "

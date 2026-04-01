@@ -329,6 +329,8 @@ public class PersistentGameApplicationService implements GameApplicationService 
         response.setRawModelResponseJson(record.rawModelResponseJson());
         response.setParsedActionJson(record.parsedActionJson());
         response.setAuditReasonJson(record.auditReasonJson());
+        response.setExecutionTraceJson(record.executionTraceJson());
+        response.setPolicySummaryJson(record.policySummaryJson());
         response.setValidationResultJson(record.validationResultJson());
         response.setErrorMessage(record.errorMessage());
         response.setCreatedAt(record.createdAt());

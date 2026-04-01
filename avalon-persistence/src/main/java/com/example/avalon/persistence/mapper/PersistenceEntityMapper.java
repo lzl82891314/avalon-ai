@@ -102,6 +102,8 @@ public final class PersistenceEntityMapper {
                 entity.getRawModelResponseJson(),
                 entity.getParsedActionJson(),
                 entity.getAuditReasonJson(),
+                entity.getExecutionTraceJson(),
+                entity.getPolicySummaryJson(),
                 entity.getValidationResultJson(),
                 entity.getErrorMessage(),
                 entity.getCreatedAt()
@@ -120,6 +122,8 @@ public final class PersistenceEntityMapper {
         entity.setRawModelResponseJson(record.rawModelResponseJson());
         entity.setParsedActionJson(record.parsedActionJson());
         entity.setAuditReasonJson(record.auditReasonJson());
+        entity.setExecutionTraceJson(record.executionTraceJson());
+        entity.setPolicySummaryJson(record.policySummaryJson());
         entity.setValidationResultJson(record.validationResultJson());
         entity.setErrorMessage(record.errorMessage());
         entity.setCreatedAt(record.createdAt());

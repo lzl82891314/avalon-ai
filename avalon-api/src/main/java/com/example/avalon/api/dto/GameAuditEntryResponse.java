@@ -11,6 +11,8 @@ public class GameAuditEntryResponse {
     private String rawModelResponseJson;
     private String parsedActionJson;
     private String auditReasonJson;
+    private String executionTraceJson;
+    private String policySummaryJson;
     private String validationResultJson;
     private String errorMessage;
     private Instant createdAt;
@@ -81,6 +83,22 @@ public class GameAuditEntryResponse {
 
     public String getValidationResultJson() {
         return validationResultJson;
+    }
+
+    public String getExecutionTraceJson() {
+        return executionTraceJson;
+    }
+
+    public void setExecutionTraceJson(String executionTraceJson) {
+        this.executionTraceJson = executionTraceJson;
+    }
+
+    public String getPolicySummaryJson() {
+        return policySummaryJson;
+    }
+
+    public void setPolicySummaryJson(String policySummaryJson) {
+        this.policySummaryJson = policySummaryJson;
     }
 
     public void setValidationResultJson(String validationResultJson) {

@@ -2,6 +2,7 @@ package com.example.avalon.runtime.service;
 
 import com.example.avalon.core.game.enums.PlayerActionType;
 import com.example.avalon.core.game.model.PlayerTurnContext;
+import com.example.avalon.core.player.memory.PlayerBeliefState;
 import com.example.avalon.runtime.engine.VisibilityService;
 import com.example.avalon.runtime.model.GameRuntimeState;
 import com.example.avalon.runtime.orchestrator.GameOrchestrator;
@@ -48,6 +49,9 @@ class TurnContextBuilderTest {
         state.memoryOf("P1").put("suspicionScores", java.util.Map.of("P4", 0.8));
         state.memoryOf("P1").put("trustScores", java.util.Map.of("P2", 0.4));
         state.memoryOf("P1").put("observations", java.util.List.of("P4 在讨论阶段发言很重"));
+        state.memoryOf("P1").put("beliefsByPlayerId", java.util.Map.of(
+                "P4", new PlayerBeliefState(0.9, 0.5, 0.7, 0.8)
+        ));
         state.memoryOf("P1").put("strategyMode", "CAUTIOUS");
         state.memoryOf("P1").put("lastSummary", "先观察 P4");
 
@@ -58,9 +62,11 @@ class TurnContextBuilderTest {
         assertEquals(2L, leaderContext.memoryState().version());
         assertEquals(0.8, leaderContext.memoryState().suspicionScores().get("P4"));
         assertEquals(0.4, leaderContext.memoryState().trustScores().get("P2"));
+        assertEquals(0.9, leaderContext.memoryState().beliefsByPlayerId().get("P4").firstOrderEvilScore());
         assertEquals("CAUTIOUS", leaderContext.memoryState().strategyMode());
         assertEquals("先观察 P4", leaderContext.memoryState().lastSummary());
         assertTrue(otherContext.memoryState().suspicionScores().isEmpty());
+        assertTrue(otherContext.memoryState().beliefsByPlayerId().isEmpty());
         assertEquals(0L, otherContext.memoryState().version());
     }
 }

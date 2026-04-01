@@ -18,6 +18,13 @@ public class AgentTurnRequestFactory {
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
     public AgentTurnRequest create(PlayerTurnContext context, PlayerAgentConfig agentConfig) {
+        return create(context, agentConfig, "actor");
+    }
+
+    public AgentTurnRequest create(PlayerTurnContext context, PlayerAgentConfig agentConfig, String modelSlotId) {
+        PlayerAgentConfig effectiveConfig = agentConfig == null ? new PlayerAgentConfig() : agentConfig;
+        String slotId = modelSlotId == null || modelSlotId.isBlank() ? "actor" : modelSlotId;
+        ModelProfile modelProfile = modelProfile(effectiveConfig, slotId);
         AgentTurnRequest request = new AgentTurnRequest();
         request.setGameId(context.gameId());
         request.setRoundNo(context.roundNo());
@@ -25,18 +32,21 @@ public class AgentTurnRequestFactory {
         request.setPlayerId(context.playerId());
         request.setSeatNo(context.seatNo());
         request.setRoleId(context.roleId());
-        request.setModelId(modelProfile(agentConfig).getModelId());
-        request.setProvider(provider(agentConfig));
-        request.setModelName(modelName(agentConfig));
-        request.setTemperature(modelProfile(agentConfig).getTemperature());
-        request.setMaxTokens(modelProfile(agentConfig).getMaxTokens());
-        request.setProviderOptions(modelProfile(agentConfig).getProviderOptions());
+        request.setAgentPolicyId(effectiveConfig.effectiveAgentPolicyId());
+        request.setStrategyProfileId(effectiveConfig.effectiveStrategyProfileId());
+        request.setModelSlotId(slotId);
+        request.setModelId(modelProfile.getModelId());
+        request.setProvider(provider(modelProfile));
+        request.setModelName(modelName(modelProfile));
+        request.setTemperature(modelProfile.getTemperature());
+        request.setMaxTokens(modelProfile.getMaxTokens());
+        request.setProviderOptions(modelProfile.getProviderOptions());
         request.setPrivateKnowledge(privateKnowledge(context));
         request.setPublicState(publicState(context));
         request.setMemory(memory(context));
         request.setAllowedActions(context.allowedActions().allowedActionTypes().stream().map(Enum::name).toList());
         request.setRulesSummary(context.rulesSummary());
-        request.setOutputSchemaVersion(defaultString(agentConfig.getOutputSchemaVersion(), "v1"));
+        request.setOutputSchemaVersion(defaultString(effectiveConfig.getOutputSchemaVersion(), "v1"));
         return request;
     }
 
@@ -76,19 +86,17 @@ public class AgentTurnRequestFactory {
         return value == null || value.isBlank() ? fallback : value;
     }
 
-    private String provider(PlayerAgentConfig agentConfig) {
-        return defaultString(modelProfile(agentConfig).getProvider(), "noop");
+    private String provider(ModelProfile modelProfile) {
+        return defaultString(modelProfile.getProvider(), "noop");
     }
 
-    private String modelName(PlayerAgentConfig agentConfig) {
-        String modelName = modelProfile(agentConfig).getModelName();
+    private String modelName(ModelProfile modelProfile) {
+        String modelName = modelProfile.getModelName();
         return modelName == null || modelName.isBlank() ? null : modelName;
     }
 
-    private ModelProfile modelProfile(PlayerAgentConfig agentConfig) {
-        if (agentConfig == null || agentConfig.getModelProfile() == null) {
-            return new ModelProfile();
-        }
-        return agentConfig.getModelProfile();
+    private ModelProfile modelProfile(PlayerAgentConfig agentConfig, String modelSlotId) {
+        ModelProfile modelProfile = agentConfig.modelForSlot(modelSlotId);
+        return modelProfile == null ? new ModelProfile() : modelProfile;
     }
 }

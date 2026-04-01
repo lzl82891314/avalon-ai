@@ -1,5 +1,7 @@
 package com.example.avalon.agent.model;
 
+import com.example.avalon.core.player.memory.PlayerBeliefState;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -11,6 +13,7 @@ public class MemoryUpdate {
     private List<String> observationsToAdd = new ArrayList<>();
     private List<String> commitmentsToAdd = new ArrayList<>();
     private List<String> inferredFactsToAdd = new ArrayList<>();
+    private Map<String, PlayerBeliefState> beliefsToUpsert = new LinkedHashMap<>();
     private String strategyMode;
     private String lastSummary;
 
@@ -52,6 +55,14 @@ public class MemoryUpdate {
 
     public void setInferredFactsToAdd(List<String> inferredFactsToAdd) {
         this.inferredFactsToAdd = inferredFactsToAdd == null ? new ArrayList<>() : new ArrayList<>(inferredFactsToAdd);
+    }
+
+    public Map<String, PlayerBeliefState> getBeliefsToUpsert() {
+        return beliefsToUpsert;
+    }
+
+    public void setBeliefsToUpsert(Map<String, PlayerBeliefState> beliefsToUpsert) {
+        this.beliefsToUpsert = beliefsToUpsert == null ? new LinkedHashMap<>() : new LinkedHashMap<>(beliefsToUpsert);
     }
 
     public String getStrategyMode() {

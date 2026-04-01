@@ -12,6 +12,7 @@ class PersistenceMigrationScriptTest {
     void initMigrationDefinesPersistenceTablesAndIndexes() throws Exception {
         Path migration = Path.of("..", "avalon-app", "src", "main", "resources", "db", "migration", "V1__init_persistence.sql");
         String sql = Files.readString(migration);
+        String extensionSql = Files.readString(Path.of("..", "avalon-app", "src", "main", "resources", "db", "migration", "V2__agent_audit_extensions.sql"));
 
         assertTrue(sql.contains("create table game_event"));
         assertTrue(sql.contains("create table game_snapshot"));
@@ -22,5 +23,7 @@ class PersistenceMigrationScriptTest {
         assertTrue(sql.contains("create unique index idx_game_snapshot_game_seq"));
         assertTrue(sql.contains("create unique index idx_player_memory_game_player_seq"));
         assertTrue(sql.contains("create index idx_model_profile_enabled_created"));
+        assertTrue(extensionSql.contains("alter table audit_record add column execution_trace_json"));
+        assertTrue(extensionSql.contains("alter table audit_record add column policy_summary_json"));
     }
 }

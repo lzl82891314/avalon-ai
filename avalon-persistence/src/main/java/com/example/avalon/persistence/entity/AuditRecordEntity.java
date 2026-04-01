@@ -47,6 +47,12 @@ public class AuditRecordEntity {
     @Column(name = "audit_reason_json", columnDefinition = "TEXT")
     private String auditReasonJson;
 
+    @Column(name = "execution_trace_json", columnDefinition = "TEXT")
+    private String executionTraceJson;
+
+    @Column(name = "policy_summary_json", columnDefinition = "TEXT")
+    private String policySummaryJson;
+
     @Column(name = "validation_result_json", columnDefinition = "TEXT")
     private String validationResultJson;
 
@@ -138,6 +144,22 @@ public class AuditRecordEntity {
 
     public String getValidationResultJson() {
         return validationResultJson;
+    }
+
+    public String getExecutionTraceJson() {
+        return executionTraceJson;
+    }
+
+    public void setExecutionTraceJson(String executionTraceJson) {
+        this.executionTraceJson = executionTraceJson;
+    }
+
+    public String getPolicySummaryJson() {
+        return policySummaryJson;
+    }
+
+    public void setPolicySummaryJson(String policySummaryJson) {
+        this.policySummaryJson = policySummaryJson;
     }
 
     public void setValidationResultJson(String validationResultJson) {

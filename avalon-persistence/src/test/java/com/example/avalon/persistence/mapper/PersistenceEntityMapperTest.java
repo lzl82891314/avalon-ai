@@ -56,7 +56,23 @@ class PersistenceEntityMapperTest {
     @Test
     void auditRoundTripPreservesFields() {
         Instant now = Instant.parse("2026-03-23T08:15:00Z");
-        AuditRecord record = new AuditRecord("a1", "g1", 7L, "p1", "ADMIN_ONLY", "{\"ctx\":true}", "hash", "{\"raw\":1}", "{\"parsed\":1}", "{\"audit\":1}", "{\"valid\":true}", null, now);
+        AuditRecord record = new AuditRecord(
+                "a1",
+                "g1",
+                7L,
+                "p1",
+                "ADMIN_ONLY",
+                "{\"ctx\":true}",
+                "hash",
+                "{\"raw\":1}",
+                "{\"parsed\":1}",
+                "{\"audit\":1}",
+                "[{\"stageId\":\"single-shot\"}]",
+                "{\"policyId\":\"legacy-single-shot\"}",
+                "{\"valid\":true}",
+                null,
+                now
+        );
 
         AuditRecordEntity entity = PersistenceEntityMapper.toEntity(record);
         AuditRecordRecordAssert.assertRoundTrip(record, entity);

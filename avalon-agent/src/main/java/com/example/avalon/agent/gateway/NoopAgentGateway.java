@@ -5,7 +5,10 @@ import com.example.avalon.agent.model.AgentTurnResult;
 import com.example.avalon.agent.model.AuditReason;
 import com.example.avalon.agent.model.MemoryUpdate;
 import com.example.avalon.agent.model.RawCompletionMetadata;
+import com.example.avalon.agent.model.StructuredInferenceRequest;
+import com.example.avalon.agent.model.StructuredInferenceResult;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
 
@@ -15,7 +18,7 @@ import java.util.List;
 import java.util.Map;
 
 @Component
-public class NoopAgentGateway implements AgentGateway {
+public class NoopAgentGateway implements ModelGateway, StructuredModelGateway {
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
     @Override
@@ -27,6 +30,22 @@ public class NoopAgentGateway implements AgentGateway {
         result.setAuditReason(buildAuditReason(request));
         result.setMemoryUpdate(buildMemoryUpdate(request));
         result.setModelMetadata(buildMetadata(request));
+        return result;
+    }
+
+    @Override
+    public StructuredInferenceResult infer(StructuredInferenceRequest request) {
+        JsonNode payload = objectMapper.valueToTree(Map.of(
+                "beliefsByPlayerId", Map.of(),
+                "strategyMode", "SAFE_DEFAULT",
+                "lastSummary", "noop structured inference",
+                "observationsToAdd", List.of("noop structured inference"),
+                "inferredFactsToAdd", List.of()
+        ));
+        StructuredInferenceResult result = new StructuredInferenceResult();
+        result.setPayload(payload);
+        result.setRawJson(payload.toString());
+        result.setModelMetadata(buildStructuredMetadata(request));
         return result;
     }
 
@@ -165,6 +184,18 @@ public class NoopAgentGateway implements AgentGateway {
         metadata.setInputTokens((long) request.getPromptText().length());
         metadata.setOutputTokens(32L);
         metadata.setAttributes(Map.of("schemaVersion", request.getOutputSchemaVersion()));
+        return metadata;
+    }
+
+    private RawCompletionMetadata buildStructuredMetadata(StructuredInferenceRequest request) {
+        RawCompletionMetadata metadata = new RawCompletionMetadata();
+        metadata.setProvider("noop");
+        metadata.setModelName("deterministic-fallback");
+        long developerTokens = request.getDeveloperPrompt() == null ? 0L : request.getDeveloperPrompt().length();
+        long userTokens = request.getUserPrompt() == null ? 0L : request.getUserPrompt().length();
+        metadata.setInputTokens(developerTokens + userTokens);
+        metadata.setOutputTokens(24L);
+        metadata.setAttributes(Map.of("modelSlotId", request.getModelSlotId()));
         return metadata;
     }
 

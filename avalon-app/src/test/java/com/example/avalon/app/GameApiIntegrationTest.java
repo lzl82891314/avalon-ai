@@ -1,5 +1,6 @@
 package com.example.avalon.app;
 
+import com.example.avalon.agent.service.AgentPolicyIds;
 import com.example.avalon.api.dto.CreateGameRequest;
 import com.example.avalon.persistence.model.AuditRecord;
 import com.example.avalon.persistence.store.AuditRecordStore;
@@ -89,6 +90,8 @@ class GameApiIntegrationTest {
                 "{\"raw\":true}",
                 "{\"parsed\":true}",
                 "{\"reason\":\"test\"}",
+                "[{\"stageId\":\"single-shot\"}]",
+                "{\"policyId\":\"legacy-single-shot\"}",
                 "{\"valid\":true}",
                 null,
                 Instant.parse("2026-03-23T00:00:00Z")
@@ -100,7 +103,9 @@ class GameApiIntegrationTest {
                 .andExpect(jsonPath("$[0].auditId").value("audit-1"))
                 .andExpect(jsonPath("$[0].eventSeqNo").value(2))
                 .andExpect(jsonPath("$[0].visibility").value("ADMIN_ONLY"))
-                .andExpect(jsonPath("$[0].rawModelResponseJson").value("{\"raw\":true}"));
+                .andExpect(jsonPath("$[0].rawModelResponseJson").value("{\"raw\":true}"))
+                .andExpect(jsonPath("$[0].executionTraceJson").value("[{\"stageId\":\"single-shot\"}]"))
+                .andExpect(jsonPath("$[0].policySummaryJson").value("{\"policyId\":\"legacy-single-shot\"}"));
     }
 
     @Test
@@ -270,6 +275,45 @@ class GameApiIntegrationTest {
         assertThat(auditEntries.get(0).path("auditReasonJson").asText()).contains("生成一个合法的");
         assertThat(auditEntries.get(0).path("validationResultJson").asText()).contains("\"valid\":true");
         assertThat(auditEntries.get(0).path("validationResultJson").asText()).contains("\"attempts\"");
+    }
+
+    @Test
+    void stepShouldExecuteTomPolicyAndPersistTwoStageAuditTrace() throws Exception {
+        CreateGameRequest request = new CreateGameRequest();
+        request.setRuleSetId("avalon-classic-5p-v1");
+        request.setSetupTemplateId("classic-5p-v1");
+        request.setSeed(111L);
+        request.setPlayers(playersWithSingleTomLlmSeat());
+
+        String responseBody = mockMvc.perform(post("/games")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String gameId = objectMapper.readTree(responseBody).get("gameId").asText();
+
+        mockMvc.perform(post("/games/{gameId}/start", gameId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RUNNING"));
+
+        mockMvc.perform(post("/games/{gameId}/step", gameId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RUNNING"));
+
+        String auditResponseBody = mockMvc.perform(get("/games/{gameId}/audit", gameId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(org.hamcrest.Matchers.greaterThan(0)))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        JsonNode auditEntries = objectMapper.readTree(auditResponseBody);
+        assertThat(auditEntries.get(0).path("executionTraceJson").asText()).contains("belief-stage");
+        assertThat(auditEntries.get(0).path("executionTraceJson").asText()).contains("decision-stage");
+        assertThat(auditEntries.get(0).path("policySummaryJson").asText()).contains("\"policyId\":\"tom-v1\"");
+        assertThat(auditEntries.get(0).path("policySummaryJson").asText()).contains("\"stageCount\":2");
     }
 
     @Test
@@ -582,6 +626,16 @@ class GameApiIntegrationTest {
         List<CreateGameRequest.PlayerSlotRequest> players = players();
         players.get(0).setControllerType("LLM");
         players.get(0).setAgentConfig(new com.example.avalon.agent.model.PlayerAgentConfig());
+        return players;
+    }
+
+    private List<CreateGameRequest.PlayerSlotRequest> playersWithSingleTomLlmSeat() {
+        List<CreateGameRequest.PlayerSlotRequest> players = players();
+        players.get(0).setControllerType("LLM");
+        com.example.avalon.agent.model.PlayerAgentConfig agentConfig = new com.example.avalon.agent.model.PlayerAgentConfig();
+        agentConfig.setAgentPolicyId(AgentPolicyIds.TOM_V1);
+        agentConfig.setStrategyProfileId("tom-v1-baseline");
+        players.get(0).setAgentConfig(agentConfig);
         return players;
     }
 

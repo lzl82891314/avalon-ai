@@ -1,6 +1,6 @@
 package com.example.avalon.agent.service;
 
-import com.example.avalon.agent.gateway.AgentGateway;
+import com.example.avalon.agent.gateway.ModelGateway;
 import com.example.avalon.agent.gateway.OpenAiCompatibleResponseException;
 import com.example.avalon.agent.model.AgentTurnRequest;
 import com.example.avalon.agent.model.AgentTurnResult;
@@ -29,14 +29,14 @@ public class ValidationRetryPolicy {
 
     public ValidatedAgentTurn execute(PlayerTurnContext context,
                                       AgentTurnRequest request,
-                                      AgentGateway agentGateway,
+                                      ModelGateway modelGateway,
                                       ResponseParser responseParser) {
         RuntimeException lastFailure = null;
         AgentTurnResult lastResult = null;
         AgentTurnRequest attemptRequest = request.copy();
         for (int attempts = 1; attempts <= DEFAULT_MAX_ATTEMPTS; attempts++) {
             try {
-                AgentTurnResult result = agentGateway.playTurn(attemptRequest);
+                AgentTurnResult result = modelGateway.playTurn(attemptRequest);
                 lastResult = result;
                 PlayerAction action = responseParser.parse(context, result);
                 privateKnowledgeExpressionValidator.validate(context, result);

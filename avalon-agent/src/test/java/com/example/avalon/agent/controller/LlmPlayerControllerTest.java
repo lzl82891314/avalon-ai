@@ -6,9 +6,11 @@ import com.example.avalon.agent.gateway.OpenAiCompatibleResponseException;
 import com.example.avalon.agent.model.AgentTurnResult;
 import com.example.avalon.agent.model.PlayerAgentConfig;
 import com.example.avalon.agent.model.RawCompletionMetadata;
+import com.example.avalon.agent.service.AgentTurnExecutionException;
 import com.example.avalon.agent.service.AgentTurnRequestFactory;
 import com.example.avalon.agent.service.PromptBuilder;
 import com.example.avalon.agent.service.ResponseParser;
+import com.example.avalon.agent.service.TurnAgent;
 import com.example.avalon.agent.service.ValidationRetryPolicy;
 import com.example.avalon.core.game.enums.Camp;
 import com.example.avalon.core.game.enums.GamePhase;
@@ -70,9 +72,12 @@ class LlmPlayerControllerTest {
 
         assertEquals("APPROVE", ((com.example.avalon.core.game.model.TeamVoteAction) result.action()).vote().name());
         assertEquals(2, result.rawMetadata().get("attempts"));
+        assertEquals("legacy-single-shot", result.rawMetadata().get("policyId"));
         assertTrue(result.rawMetadata().containsKey("inputContext"));
         assertTrue(result.rawMetadata().containsKey("rawModelResponse"));
         assertTrue(result.rawMetadata().containsKey("validation"));
+        assertTrue(result.rawMetadata().containsKey("executionTrace"));
+        assertTrue(result.rawMetadata().containsKey("policySummary"));
     }
 
     @Test
@@ -111,10 +116,18 @@ class LlmPlayerControllerTest {
         assertEquals("Agent turn validation failed after 2 attempts", error.getMessage());
         Map<String, Object> rawModelResponse = rawMap(error.rawMetadata().get("rawModelResponse"));
         Map<String, Object> validation = rawMap(error.rawMetadata().get("validation"));
+        Map<String, Object> policySummary = rawMap(error.rawMetadata().get("policySummary"));
+        List<Map<String, Object>> executionTrace = rawWarnings(error.rawMetadata().get("executionTrace"));
         assertEquals("plain_text", rawModelResponse.get("assistantContentShape"));
         assertEquals("hi", rawModelResponse.get("assistantContentPreview"));
         assertEquals("这里只返回了推理。", rawModelResponse.get("reasoningDetailsPreview"));
         assertEquals("plain_text", validation.get("assistantContentShape"));
+        assertEquals("legacy-single-shot", error.rawMetadata().get("policyId"));
+        assertEquals("legacy-single-shot", validation.get("policyId"));
+        assertEquals("legacy-single-shot", policySummary.get("policyId"));
+        assertEquals("FAILED", policySummary.get("status"));
+        assertEquals("single-shot-failed", executionTrace.get(0).get("stageId"));
+        assertEquals("FAILED", executionTrace.get(0).get("status"));
         assertEquals("ADMIN_ONLY", error.rawMetadata().get("auditVisibility"));
     }
 
@@ -233,6 +246,50 @@ class LlmPlayerControllerTest {
         Map<String, Object> inputContext = rawMap(result.rawMetadata().get("inputContext"));
         assertEquals(640, inputContext.get("maxTokens"));
         assertTrue(String.valueOf(inputContext.get("promptText")).contains("优先先写 action"));
+    }
+
+    @Test
+    void shouldPreserveExecutionTraceAndPolicySummaryFromTurnAgentFailure() {
+        AgentTurnRequestFactory requestFactory = new AgentTurnRequestFactory();
+        PlayerTurnContext context = teamVoteContext();
+        com.example.avalon.agent.model.AgentTurnRequest request = requestFactory.create(context, new PlayerAgentConfig());
+        TurnAgent turnAgent = (turnContext, config) -> {
+            throw new AgentTurnExecutionException(
+                    "tom-v1 belief stage failed",
+                    request,
+                    null,
+                    1,
+                    List.of(Map.of(
+                            "stageId", "belief-stage",
+                            "status", "FAILED"
+                    )),
+                    Map.of(
+                            "policyId", "tom-v1",
+                            "failedStage", "belief-stage"
+                    ),
+                    new IllegalStateException("boom")
+            );
+        };
+        LlmPlayerController controller = new LlmPlayerController(
+                turnAgent,
+                requestFactory,
+                new PromptBuilder(),
+                new ResponseParser(),
+                new ValidationRetryPolicy(),
+                new PlayerAgentConfig()
+        );
+
+        PlayerActionGenerationException error = assertThrows(
+                PlayerActionGenerationException.class,
+                () -> controller.act(context)
+        );
+
+        List<Map<String, Object>> executionTrace = rawWarnings(error.rawMetadata().get("executionTrace"));
+        Map<String, Object> policySummary = rawMap(error.rawMetadata().get("policySummary"));
+        assertEquals("belief-stage", executionTrace.get(0).get("stageId"));
+        assertEquals("FAILED", executionTrace.get(0).get("status"));
+        assertEquals("tom-v1", policySummary.get("policyId"));
+        assertEquals("belief-stage", policySummary.get("failedStage"));
     }
 
     @SuppressWarnings("unchecked")

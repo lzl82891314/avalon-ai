@@ -64,6 +64,7 @@ public class TurnContextBuilder {
         payload.putIfAbsent("version", 0L);
         payload.putIfAbsent("roleId", assignment.roleId());
         payload.putIfAbsent("camp", assignment.camp().name());
+        payload.putIfAbsent("beliefsByPlayerId", Map.of());
         payload.putIfAbsent("strategyMode", "NEUTRAL");
         payload.putIfAbsent("updatedAt", state.updatedAt());
         return objectMapper.convertValue(payload, PlayerMemoryState.class);

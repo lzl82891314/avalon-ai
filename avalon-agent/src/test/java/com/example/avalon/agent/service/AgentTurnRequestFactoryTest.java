@@ -75,6 +75,34 @@ class AgentTurnRequestFactoryTest {
     }
 
     @Test
+    void shouldSelectRequestedModelSlotAndDefaultBlankSlotToActor() {
+        PlayerAgentConfig agentConfig = new PlayerAgentConfig();
+        ModelProfile defaultProfile = new ModelProfile();
+        defaultProfile.setModelId("default-model");
+        defaultProfile.setProvider("openai");
+        agentConfig.setModelProfile(defaultProfile);
+
+        ModelProfile actorProfile = new ModelProfile();
+        actorProfile.setModelId("actor-model");
+        actorProfile.setProvider("openai");
+        ModelProfile criticProfile = new ModelProfile();
+        criticProfile.setModelId("critic-model");
+        criticProfile.setProvider("openai");
+        agentConfig.setModelSlots(Map.of(
+                "actor", actorProfile,
+                "critic", criticProfile
+        ));
+
+        AgentTurnRequest actorRequest = factory.create(teamVoteContext(), agentConfig, " ");
+        AgentTurnRequest criticRequest = factory.create(teamVoteContext(), agentConfig, "critic");
+
+        assertEquals("actor", actorRequest.getModelSlotId());
+        assertEquals("actor-model", actorRequest.getModelId());
+        assertEquals("critic", criticRequest.getModelSlotId());
+        assertEquals("critic-model", criticRequest.getModelId());
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     void shouldNormalizeVisiblePlayersIntoPlainMaps() {
         AgentTurnRequest request = factory.create(percivalTeamVoteContext(), new PlayerAgentConfig());

@@ -5,6 +5,7 @@ import com.example.avalon.core.game.enums.GamePhase;
 import com.example.avalon.core.game.enums.GameStatus;
 import com.example.avalon.core.game.enums.MissionChoice;
 import com.example.avalon.core.game.enums.VoteChoice;
+import com.example.avalon.core.common.exception.GameRuleViolationException;
 import com.example.avalon.core.game.model.AssassinationAction;
 import com.example.avalon.core.game.model.MissionAction;
 import com.example.avalon.core.game.model.PlayerAction;
@@ -17,7 +18,7 @@ import com.example.avalon.core.player.controller.PlayerActionGenerationException
 import com.example.avalon.core.player.enums.PlayerControllerType;
 import com.example.avalon.core.role.model.RoleAssignment;
 import com.example.avalon.runtime.controller.PlayerControllerResolver;
-import com.example.avalon.runtime.engine.ClassicFivePlayerGameRuleEngine;
+import com.example.avalon.runtime.engine.ConfigDrivenGameRuleEngine;
 import com.example.avalon.runtime.engine.GameRuleEngine;
 import com.example.avalon.runtime.engine.RoleAssignmentService;
 import com.example.avalon.runtime.engine.VisibilityService;
@@ -48,7 +49,7 @@ public class GameOrchestrator {
 
     public GameOrchestrator() {
         this(new GameSessionService(),
-                new ClassicFivePlayerGameRuleEngine(),
+                new ConfigDrivenGameRuleEngine(),
                 new RoleAssignmentService(),
                 new VisibilityService(),
                 new PlayerControllerResolver(),
@@ -234,6 +235,9 @@ public class GameOrchestrator {
         }
         recordAction(state, player, result);
         MissionAction missionAction = (MissionAction) result.action();
+        if (context.privateView().camp() == Camp.GOOD && missionAction.choice() == MissionChoice.FAIL) {
+            throw new GameRuleViolationException("Good players may not submit FAIL mission actions");
+        }
         state.putMissionChoice(player.seatNo(), missionAction.choice());
         state.appendEvent("MISSION_ACTION_CAST", GamePhase.MISSION_ACTION, player.playerId(), Map.of("choice", missionAction.choice().name()));
         state.missionIndex(state.missionIndex() + 1);
@@ -244,7 +248,7 @@ public class GameOrchestrator {
 
     private void resolveMission(GameRuntimeState state) {
         long fails = state.currentMissionChoices().values().stream().filter(choice -> choice == MissionChoice.FAIL).count();
-        if (fails >= ruleEngine.missionFailThresholdForRound(state.roundNo())) {
+        if (fails >= ruleEngine.missionFailThresholdForRound(state)) {
             state.addFailedMissionRound(state.roundNo());
             state.appendEvent("MISSION_FAILED", GamePhase.MISSION_RESOLUTION, "SYSTEM", Map.of("roundNo", state.roundNo(), "fails", fails));
         } else {
@@ -272,8 +276,10 @@ public class GameOrchestrator {
     }
 
     private void processAssassination(GameRuntimeState state) {
+        String assassinRoleId = state.setup().ruleSetDefinition().assassinationRule().assassinRoleId();
+        String merlinRoleId = state.setup().ruleSetDefinition().assassinationRule().merlinRoleId();
         PlayerRegistration assassin = state.roleAssignments().values().stream()
-                .filter(assignment -> "ASSASSIN".equals(assignment.roleId()))
+                .filter(assignment -> assassinRoleId.equals(assignment.roleId()))
                 .map(assignment -> state.playerBySeat(assignment.seatNo()))
                 .findFirst()
                 .orElseThrow(() -> new IllegalStateException("Missing assassin"));
@@ -292,7 +298,7 @@ public class GameOrchestrator {
         state.appendEvent("ASSASSINATION_SUBMITTED", GamePhase.ASSASSINATION, assassin.playerId(), Map.of(
                 "targetPlayerId", assassinationAction.targetPlayerId(),
                 "targetRole", target.roleId()));
-        if ("MERLIN".equals(target.roleId())) {
+        if (merlinRoleId.equals(target.roleId())) {
             endGame(state, Camp.EVIL, GamePhase.GAME_END);
         } else {
             endGame(state, Camp.GOOD, GamePhase.GAME_END);

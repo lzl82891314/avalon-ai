@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import java.net.URI;
+import java.net.http.HttpTimeoutException;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -97,7 +98,68 @@ class OpenAiChatCompletionsGatewayTest {
 
         IllegalStateException error = assertThrows(IllegalStateException.class, () -> gateway.playTurn(request));
 
-        assertTrue(error.getMessage().contains("OpenAI-compatible provider 'openai' requires apiKey"));
+        assertTrue(error.getMessage().contains("OpenAI-compatible provider 'openai' requires an API key"));
+    }
+
+    @Test
+    void shouldUseLongerDefaultTimeoutForHighLatencyProviders() {
+        AtomicReference<Duration> timeoutRef = new AtomicReference<>();
+        OpenAiHttpTransport transport = (uri, headers, requestBody, timeout) -> {
+            timeoutRef.set(timeout);
+            return json("""
+                    {
+                      "choices":[
+                        {
+                          "message":{
+                            "content":"{\\"action\\":{\\"actionType\\":\\"PUBLIC_SPEECH\\",\\"speechText\\":\\"hi\\"}}"
+                          }
+                        }
+                      ]
+                    }
+                    """);
+        };
+        OpenAiChatCompletionsGateway gateway = new OpenAiChatCompletionsGateway(transport, name -> null);
+        AgentTurnRequest request = request("glm");
+        request.setProviderOptions(Map.of(
+                "apiKey", "test-key",
+                "baseUrl", "https://api.openai.test/v1",
+                "response_format", Map.of("type", "json_object")
+        ));
+
+        gateway.playTurn(request);
+
+        assertEquals(Duration.ofSeconds(60), timeoutRef.get());
+    }
+
+    @Test
+    void shouldPreferExplicitTimeoutOverProviderDefault() {
+        AtomicReference<Duration> timeoutRef = new AtomicReference<>();
+        OpenAiHttpTransport transport = (uri, headers, requestBody, timeout) -> {
+            timeoutRef.set(timeout);
+            return json("""
+                    {
+                      "choices":[
+                        {
+                          "message":{
+                            "content":"{\\"action\\":{\\"actionType\\":\\"PUBLIC_SPEECH\\",\\"speechText\\":\\"hi\\"}}"
+                          }
+                        }
+                      ]
+                    }
+                    """);
+        };
+        OpenAiChatCompletionsGateway gateway = new OpenAiChatCompletionsGateway(transport, name -> null);
+        AgentTurnRequest request = request("glm");
+        request.setProviderOptions(Map.of(
+                "apiKey", "test-key",
+                "baseUrl", "https://api.openai.test/v1",
+                "timeoutMillis", 1234,
+                "response_format", Map.of("type", "json_object")
+        ));
+
+        gateway.playTurn(request);
+
+        assertEquals(Duration.ofMillis(1234), timeoutRef.get());
     }
 
     @Test
@@ -154,6 +216,43 @@ class OpenAiChatCompletionsGatewayTest {
         gateway.playTurn(request);
 
         assertEquals(URI.create("https://api.openai.test/v1/chat/completions"), uriRef.get());
+    }
+
+    @Test
+    void shouldWrapTransportDiagnosticsFromHttpTransport() {
+        OpenAiHttpTransport transport = (uri, headers, requestBody, timeout) -> {
+            throw new OpenAiCompatibleTransportException(
+                    "OpenAI-compatible HTTP transport failed after 3/3 attempts (java.net.http.HttpTimeoutException: request timed out)",
+                    new HttpTimeoutException("request timed out"),
+                    Map.of(
+                            "failureDomain", "transport",
+                            "failureKind", "timeout",
+                            "transportAttempts", 3,
+                            "timeoutMs", 60000L,
+                            "rootExceptionClass", "java.net.http.HttpTimeoutException",
+                            "rootExceptionMessage", "request timed out"
+                    )
+            );
+        };
+        OpenAiChatCompletionsGateway gateway = new OpenAiChatCompletionsGateway(transport, name -> null);
+        AgentTurnRequest request = request("glm");
+        request.setProviderOptions(Map.of(
+                "apiKey", "test-key",
+                "baseUrl", "https://api.openai.test/v1",
+                "response_format", Map.of("type", "json_object")
+        ));
+
+        OpenAiCompatibleResponseException error = assertInstanceOf(
+                OpenAiCompatibleResponseException.class,
+                assertThrows(RuntimeException.class, () -> gateway.playTurn(request))
+        );
+
+        assertEquals("transport", error.diagnostics().get("failureDomain"));
+        assertEquals("timeout", error.diagnostics().get("failureKind"));
+        assertEquals(3, error.diagnostics().get("transportAttempts"));
+        assertEquals(60000L, error.diagnostics().get("timeoutMs"));
+        assertEquals("java.net.http.HttpTimeoutException", error.diagnostics().get("rootExceptionClass"));
+        assertTrue(error.getMessage().contains("HttpTimeoutException"));
     }
 
     @Test

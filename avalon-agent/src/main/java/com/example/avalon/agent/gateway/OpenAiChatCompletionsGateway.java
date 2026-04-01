@@ -24,32 +24,48 @@ import java.util.function.Function;
 public class OpenAiChatCompletionsGateway implements AgentGateway {
     private static final String GATEWAY_TYPE = "openai-compatible";
     private static final String DEFAULT_MODEL = "gpt-5.2";
-    private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(30);
     private static final String OPTIONAL_SECTION_WARNINGS = "optionalSectionWarnings";
 
     private final OpenAiHttpTransport transport;
-    private final Function<String, String> environmentLookup;
+    private final ModelProfileApiKeyResolver apiKeyResolver;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
     @Autowired
-    public OpenAiChatCompletionsGateway(OpenAiHttpTransport transport) {
-        this(transport, System::getenv);
+    public OpenAiChatCompletionsGateway(OpenAiHttpTransport transport,
+                                        ModelProfileApiKeyResolver apiKeyResolver) {
+        this.transport = transport;
+        this.apiKeyResolver = apiKeyResolver;
     }
 
-    OpenAiChatCompletionsGateway(OpenAiHttpTransport transport, Function<String, String> environmentLookup) {
-        this.transport = transport;
-        this.environmentLookup = environmentLookup;
+    OpenAiChatCompletionsGateway(OpenAiHttpTransport transport,
+                                 Function<String, String> environmentLookup) {
+        this(transport, (modelId, providerOptions) -> {
+            String apiKey = OpenAiCompatibleSupport.stringOption(providerOptions, "apiKey");
+            String apiKeyEnv = OpenAiCompatibleSupport.stringOption(providerOptions, "apiKeyEnv");
+            if ((apiKey == null || apiKey.isBlank()) && apiKeyEnv != null && !apiKeyEnv.isBlank()) {
+                apiKey = environmentLookup.apply(apiKeyEnv);
+            }
+            if (apiKey == null || apiKey.isBlank()) {
+                apiKey = environmentLookup.apply(ModelProfileSecretSupport.DEFAULT_SHARED_ENV_VAR);
+            }
+            return apiKey;
+        });
     }
 
     @Override
     public AgentTurnResult playTurn(AgentTurnRequest request) {
         RequestSettings settings = requestSettings(request);
-        JsonNode response = transport.postChatCompletion(
-                OpenAiCompatibleSupport.endpointUri(settings.baseUrl()),
-                headers(settings),
-                requestBody(request),
-                settings.timeout()
-        );
+        JsonNode response;
+        try {
+            response = transport.postChatCompletion(
+                    OpenAiCompatibleSupport.endpointUri(settings.baseUrl()),
+                    headers(settings),
+                    requestBody(request),
+                    settings.timeout()
+            );
+        } catch (RuntimeException exception) {
+            throw transportException(request, exception);
+        }
         return parseResponse(request, response);
     }
 
@@ -212,23 +228,16 @@ public class OpenAiChatCompletionsGateway implements AgentGateway {
 
     private RequestSettings requestSettings(AgentTurnRequest request) {
         Map<String, Object> providerOptions = request.getProviderOptions();
-        String apiKey = OpenAiCompatibleSupport.stringOption(providerOptions, "apiKey");
-        String apiKeyEnv = OpenAiCompatibleSupport.stringOption(providerOptions, "apiKeyEnv");
-        if ((apiKey == null || apiKey.isBlank()) && apiKeyEnv != null && !apiKeyEnv.isBlank()) {
-            apiKey = environmentLookup.apply(apiKeyEnv);
-        }
-        if (apiKey == null || apiKey.isBlank()) {
-            apiKey = environmentLookup.apply("OPENAI_API_KEY");
-        }
+        String apiKey = apiKeyResolver.resolveApiKey(request.getModelId(), providerOptions);
         if (apiKey == null || apiKey.isBlank()) {
             throw new IllegalStateException(
-                    "OpenAI-compatible provider '" + providerId(request) + "' requires apiKey, apiKeyEnv, or OPENAI_API_KEY"
+                    ModelProfileSecretSupport.missingApiKeyMessage(providerId(request), request.getModelId())
             );
         }
         String baseUrl = OpenAiCompatibleSupport.stringOption(providerOptions, "baseUrl");
         String organization = OpenAiCompatibleSupport.stringOption(providerOptions, "organization");
         String project = OpenAiCompatibleSupport.stringOption(providerOptions, "project");
-        Duration timeout = timeout(providerOptions.get("timeoutMillis"));
+        Duration timeout = timeout(request.getProvider(), providerOptions.get("timeoutMillis"));
         return new RequestSettings(
                 baseUrl == null || baseUrl.isBlank() ? OpenAiCompatibleSupport.DEFAULT_BASE_URL : baseUrl,
                 apiKey,
@@ -238,14 +247,8 @@ public class OpenAiChatCompletionsGateway implements AgentGateway {
         );
     }
 
-    private Duration timeout(Object rawTimeoutMillis) {
-        if (rawTimeoutMillis instanceof Number number) {
-            return Duration.ofMillis(number.longValue());
-        }
-        if (rawTimeoutMillis instanceof String text && !text.isBlank()) {
-            return Duration.ofMillis(Long.parseLong(text));
-        }
-        return DEFAULT_TIMEOUT;
+    private Duration timeout(String provider, Object rawTimeoutMillis) {
+        return OpenAiCompatibleSupport.effectiveTimeout(provider, rawTimeoutMillis);
     }
 
     private String defaultModel(String modelName) {
@@ -281,6 +284,24 @@ public class OpenAiChatCompletionsGateway implements AgentGateway {
                 textOrFallback(response.path("model"), defaultModel(request.getModelName())),
                 finishReason,
                 analysis
+        );
+    }
+
+    private OpenAiCompatibleResponseException transportException(AgentTurnRequest request, RuntimeException exception) {
+        if (exception instanceof OpenAiCompatibleResponseException compatibleResponseException) {
+            return compatibleResponseException;
+        }
+        Map<String, Object> diagnostics = exception instanceof OpenAiCompatibleTransportException transportException
+                ? transportException.diagnostics()
+                : Map.of("failureDomain", "transport");
+        return new OpenAiCompatibleResponseException(
+                exception.getMessage() == null ? "OpenAI-compatible HTTP transport failed" : exception.getMessage(),
+                exception,
+                providerId(request),
+                defaultModel(request.getModelName()),
+                null,
+                null,
+                diagnostics
         );
     }
 

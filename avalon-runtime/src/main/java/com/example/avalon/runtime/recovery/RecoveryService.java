@@ -13,7 +13,7 @@ import com.example.avalon.persistence.model.PlayerMemorySnapshotRecord;
 import com.example.avalon.persistence.store.GameEventStore;
 import com.example.avalon.persistence.store.GameSnapshotStore;
 import com.example.avalon.persistence.store.PlayerMemorySnapshotStore;
-import com.example.avalon.runtime.engine.ClassicFivePlayerGameRuleEngine;
+import com.example.avalon.runtime.engine.ConfigDrivenGameRuleEngine;
 import com.example.avalon.runtime.engine.GameRuleEngine;
 import com.example.avalon.runtime.model.GameEvent;
 import com.example.avalon.runtime.model.GameRuntimeState;
@@ -41,7 +41,7 @@ public class RecoveryService {
             PlayerMemorySnapshotStore playerMemorySnapshotStore,
             RuntimeStateCodec runtimeStateCodec
     ) {
-        this(gameSnapshotStore, gameEventStore, playerMemorySnapshotStore, runtimeStateCodec, new ClassicFivePlayerGameRuleEngine());
+        this(gameSnapshotStore, gameEventStore, playerMemorySnapshotStore, runtimeStateCodec, new ConfigDrivenGameRuleEngine());
     }
 
     public RecoveryService(
@@ -157,7 +157,8 @@ public class RecoveryService {
             case "MISSION_FAILED" -> resolveMissionOutcome(state, readInt(payload.get("roundNo"), state.roundNo()), true);
             case "ASSASSINATION_SUBMITTED" -> {
                 String targetRole = readString(payload.get("targetRole"));
-                endGame(state, "MERLIN".equals(targetRole) ? Camp.EVIL : Camp.GOOD);
+                String merlinRoleId = state.setup().ruleSetDefinition().assassinationRule().merlinRoleId();
+                endGame(state, merlinRoleId.equals(targetRole) ? Camp.EVIL : Camp.GOOD);
             }
             case "GAME_ENDED" -> {
                 state.winner(Camp.valueOf(readString(payload.get("winner"))));

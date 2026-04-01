@@ -7,6 +7,7 @@ import com.example.avalon.core.game.enums.GameStatus;
 import com.example.avalon.core.game.enums.PlayerActionType;
 import com.example.avalon.core.game.enums.PlayerConnectionState;
 import com.example.avalon.core.game.model.AllowedActionSet;
+import com.example.avalon.core.game.model.MissionAction;
 import com.example.avalon.core.game.model.PlayerTurnContext;
 import com.example.avalon.core.game.model.PublicGameSnapshot;
 import com.example.avalon.core.game.model.PublicPlayerSummary;
@@ -28,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class ResponseParserTest {
     private final ResponseParser responseParser = new ResponseParser();
@@ -43,6 +45,17 @@ class ResponseParserTest {
         TeamProposalAction action = (TeamProposalAction) responseParser.parse(context, result);
 
         assertEquals(List.of("P1", "P2"), action.selectedPlayerIds());
+    }
+
+    @Test
+    void shouldRejectFailMissionActionFromGoodPlayer() {
+        PlayerTurnContext context = missionContext(Camp.GOOD);
+        AgentTurnResult result = new AgentTurnResult();
+        result.setActionJson("""
+                {"actionType":"MISSION_ACTION","choice":"FAIL"}
+                """);
+
+        assertThrows(IllegalStateException.class, () -> responseParser.parse(context, result));
     }
 
     private PlayerTurnContext teamProposalContext() {
@@ -101,6 +114,65 @@ class ResponseParserTest {
                 ),
                 PlayerMemoryState.empty("game-1", "P1", "MERLIN", Camp.GOOD, Instant.parse("2026-03-24T00:00:00Z")),
                 new AllowedActionSet("game-1", "P1", 1, EnumSet.of(PlayerActionType.TEAM_PROPOSAL)),
+                ruleSetDefinition,
+                new SetupTemplate("classic-5p-v1", 5, true, List.of("MERLIN", "PERCIVAL", "LOYAL_SERVANT", "MORGANA", "ASSASSIN")),
+                "Classic five-player Avalon"
+        );
+    }
+
+    private PlayerTurnContext missionContext(Camp camp) {
+        RuleSetDefinition ruleSetDefinition = new RuleSetDefinition(
+                "avalon-classic-5p-v1",
+                "Avalon Classic 5 Players",
+                "1.0.0",
+                5,
+                5,
+                List.of(
+                        new RoundTeamSizeRule(1, 2),
+                        new RoundTeamSizeRule(2, 3),
+                        new RoundTeamSizeRule(3, 2),
+                        new RoundTeamSizeRule(4, 3),
+                        new RoundTeamSizeRule(5, 3)
+                ),
+                Map.of(1, 1, 2, 1, 3, 1, 4, 1, 5, 1),
+                List.of("classic-5p-v1"),
+                new AssassinationRuleDefinition(true, "ASSASSIN", "MERLIN"),
+                new VisibilityPolicyDefinition(true),
+                true
+        );
+        return new PlayerTurnContext(
+                "game-1",
+                1,
+                GamePhase.MISSION_ACTION.name(),
+                "P1",
+                1,
+                "MERLIN",
+                new PublicGameSnapshot(
+                        "game-1",
+                        GameStatus.RUNNING,
+                        GamePhase.MISSION_ACTION,
+                        1,
+                        0,
+                        0,
+                        0,
+                        1,
+                        List.of("P1"),
+                        null,
+                        null,
+                        List.of(new PublicPlayerSummary("game-1", "P1", 1, "P1", PlayerControllerType.LLM, PlayerConnectionState.DISCONNECTED)),
+                        Instant.parse("2026-03-24T00:00:00Z")
+                ),
+                new PlayerPrivateView(
+                        "game-1",
+                        "P1",
+                        1,
+                        "MERLIN",
+                        camp,
+                        new PlayerPrivateKnowledge(List.of(), List.of()),
+                        List.of()
+                ),
+                PlayerMemoryState.empty("game-1", "P1", "MERLIN", camp, Instant.parse("2026-03-24T00:00:00Z")),
+                new AllowedActionSet("game-1", "P1", 1, EnumSet.of(PlayerActionType.MISSION_ACTION)),
                 ruleSetDefinition,
                 new SetupTemplate("classic-5p-v1", 5, true, List.of("MERLIN", "PERCIVAL", "LOYAL_SERVANT", "MORGANA", "ASSASSIN")),
                 "Classic five-player Avalon"

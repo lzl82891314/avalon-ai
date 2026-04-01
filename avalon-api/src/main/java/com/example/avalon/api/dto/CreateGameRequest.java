@@ -95,6 +95,7 @@ public class CreateGameRequest {
 
     public static class LlmSelectionRequest {
         private String mode;
+        private Map<Integer, String> seatBindings = new LinkedHashMap<>();
         private Map<String, String> roleBindings = new LinkedHashMap<>();
         private List<String> candidateModelIds = new ArrayList<>();
 
@@ -104,6 +105,14 @@ public class CreateGameRequest {
 
         public void setMode(String mode) {
             this.mode = mode;
+        }
+
+        public Map<Integer, String> getSeatBindings() {
+            return seatBindings;
+        }
+
+        public void setSeatBindings(Map<Integer, String> seatBindings) {
+            this.seatBindings = seatBindings == null ? new LinkedHashMap<>() : new LinkedHashMap<>(seatBindings);
         }
 
         public Map<String, String> getRoleBindings() {

@@ -27,8 +27,13 @@ class TurnContextBuilderTest {
 
         GameRuntimeState proposalState = state;
         TurnContextBuilder builder = new TurnContextBuilder(new VisibilityService());
-        PlayerTurnContext leaderContext = builder.build(proposalState, proposalState.playerById("P1"));
-        PlayerTurnContext nonLeaderContext = builder.build(proposalState, proposalState.playerById("P2"));
+        var leader = proposalState.playerBySeat(proposalState.currentLeaderSeat());
+        var nonLeader = proposalState.players().stream()
+                .filter(player -> player.seatNo() != proposalState.currentLeaderSeat())
+                .findFirst()
+                .orElseThrow();
+        PlayerTurnContext leaderContext = builder.build(proposalState, leader);
+        PlayerTurnContext nonLeaderContext = builder.build(proposalState, nonLeader);
 
         assertEquals(Set.of(PlayerActionType.TEAM_PROPOSAL), leaderContext.allowedActions().allowedActionTypes());
         assertEquals(Set.of(), nonLeaderContext.allowedActions().allowedActionTypes());

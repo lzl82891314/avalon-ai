@@ -52,7 +52,7 @@ public class TurnContextBuilder {
                 allowedActions,
                 state.runtimeRuleSetDefinition(),
                 state.runtimeSetupTemplate(),
-                "经典五人阿瓦隆");
+                rulesSummary(state));
     }
 
     private PlayerMemoryState memoryState(GameRuntimeState state,
@@ -96,5 +96,23 @@ public class TurnContextBuilder {
                 state.winnerCamp() == null ? null : state.winnerCamp().name(),
                 players,
                 state.updatedAt());
+    }
+    private String rulesSummary(GameRuntimeState state) {
+        String teamSizes = state.setup().ruleSetDefinition().teamSizeRules().stream()
+                .sorted(java.util.Comparator.comparingInt(com.example.avalon.core.setup.model.RoundTeamSizeRule::round))
+                .map(rule -> String.valueOf(rule.teamSize()))
+                .collect(Collectors.joining("/"));
+        String failThresholds = state.setup().ruleSetDefinition().teamSizeRules().stream()
+                .sorted(java.util.Comparator.comparingInt(com.example.avalon.core.setup.model.RoundTeamSizeRule::round))
+                .map(rule -> String.valueOf(state.setup().ruleSetDefinition().failThresholdForRound(rule.round())))
+                .collect(Collectors.joining("/"));
+        boolean assassinationEnabled = state.setup().ruleSetDefinition().assassinationRule() != null
+                && state.setup().ruleSetDefinition().assassinationRule().enabled();
+        return "标准阿瓦隆 %d 人局；任务人数=%s；失败阈值=%s；刺杀阶段=%s。".formatted(
+                state.playerCount(),
+                teamSizes,
+                failThresholds,
+                assassinationEnabled ? "开启" : "关闭"
+        );
     }
 }

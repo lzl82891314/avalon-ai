@@ -45,10 +45,24 @@ public class LlmSelectionResolutionService implements ResolvedLlmConfigInitializ
             return Map.of();
         }
         return switch (selectionConfig.mode()) {
+            case SEAT_BINDING -> resolveSeatBindings(llmPlayers, selectionConfig);
             case ROLE_BINDING -> resolveRoleBindings(state, llmPlayers, selectionConfig);
             case RANDOM_POOL -> resolveRandomPool(llmPlayers, selectionConfig, state.setup().seed());
             case NONE -> Map.of();
         };
+    }
+
+    private Map<String, Map<String, Object>> resolveSeatBindings(List<PlayerRegistration> llmPlayers,
+                                                                 LlmSelectionConfig selectionConfig) {
+        Map<String, Map<String, Object>> resolvedConfigs = new LinkedHashMap<>();
+        for (PlayerRegistration player : llmPlayers) {
+            String modelId = selectionConfig.seatBindings().get(player.seatNo());
+            if (modelId == null || modelId.isBlank()) {
+                throw new IllegalArgumentException("Missing model binding for seat " + player.seatNo());
+            }
+            resolvedConfigs.put(player.playerId(), resolvedControllerConfig(player, modelProfileCatalogService.requireEnabledProfile(modelId)));
+        }
+        return resolvedConfigs;
     }
 
     private Map<String, Map<String, Object>> resolveRoleBindings(GameRuntimeState state,

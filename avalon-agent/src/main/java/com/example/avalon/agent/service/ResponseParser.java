@@ -49,7 +49,7 @@ public class ResponseParser {
         return switch (actionType) {
             case TEAM_PROPOSAL -> parseProposal(context, root);
             case TEAM_VOTE -> parseVote(root);
-            case MISSION_ACTION -> parseMission(root);
+            case MISSION_ACTION -> parseMission(context, root);
             case ASSASSINATION -> parseAssassination(root);
             case PUBLIC_SPEECH -> new PublicSpeechAction(root.path("speechText").asText(""));
         };
@@ -68,8 +68,12 @@ public class ResponseParser {
         return new TeamVoteAction(VoteChoice.valueOf(root.path("vote").asText("")));
     }
 
-    private MissionAction parseMission(JsonNode root) {
-        return new MissionAction(MissionChoice.valueOf(root.path("choice").asText("")));
+    private MissionAction parseMission(PlayerTurnContext context, JsonNode root) {
+        MissionChoice choice = MissionChoice.valueOf(root.path("choice").asText(""));
+        if (choice == MissionChoice.FAIL && context.privateView().camp() == com.example.avalon.core.game.enums.Camp.GOOD) {
+            throw new IllegalStateException("Good players may not submit FAIL mission actions");
+        }
+        return new MissionAction(choice);
     }
 
     private AssassinationAction parseAssassination(JsonNode root) {

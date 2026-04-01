@@ -14,6 +14,7 @@ import com.example.avalon.runtime.model.GameSetup;
 import com.example.avalon.runtime.model.PlayerRegistration;
 import com.example.avalon.runtime.orchestrator.GameOrchestrator;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -22,43 +23,36 @@ public final class ScriptedAvalonFixture {
     }
 
     public static GameSetup classicFivePlayerSetup(long seed) {
+        return classicSetup(5, seed);
+    }
+
+    public static GameSetup classicSetup(int playerCount, long seed) {
         RuleSetDefinition ruleSetDefinition = new RuleSetDefinition(
-                "avalon-classic-5p-v1",
-                "Avalon Classic 5 Players",
-                "1.0.0",
-                5,
-                5,
-                List.of(
-                        new RoundTeamSizeRule(1, 2),
-                        new RoundTeamSizeRule(2, 3),
-                        new RoundTeamSizeRule(3, 2),
-                        new RoundTeamSizeRule(4, 3),
-                        new RoundTeamSizeRule(5, 3)
-                ),
-                Map.of(1, 1, 2, 1, 3, 1, 4, 1, 5, 1),
-                List.of("classic-5p-v1"),
+                "avalon-classic-" + playerCount + "p-v2",
+                "Avalon Classic " + playerCount + " Players V2",
+                "2.0.0",
+                playerCount,
+                playerCount,
+                teamSizeRules(playerCount),
+                failThresholds(playerCount),
+                List.of("classic-" + playerCount + "p-v2"),
                 new AssassinationRuleDefinition(true, "ASSASSIN", "MERLIN"),
                 new VisibilityPolicyDefinition(true),
                 true);
         SetupTemplate setupTemplate = new SetupTemplate(
-                "classic-5p-v1",
-                5,
+                "classic-" + playerCount + "p-v2",
+                playerCount,
                 true,
-                List.of("MERLIN", "PERCIVAL", "LOYAL_SERVANT", "MORGANA", "ASSASSIN"));
+                roleIds(playerCount));
         return new GameSetup(
-                "scripted-classic-5p-" + seed,
-                "avalon-classic-5p-v1",
+                "scripted-classic-" + playerCount + "p-" + seed,
+                "avalon-classic-" + playerCount + "p-v2",
                 ruleSetDefinition,
-                "classic-5p-v1",
+                "classic-" + playerCount + "p-v2",
                 setupTemplate,
                 seed,
                 classicRoleDefinitions(),
-                List.of(
-                        new PlayerRegistration("P1", 1, "P1", PlayerControllerType.SCRIPTED),
-                        new PlayerRegistration("P2", 2, "P2", PlayerControllerType.SCRIPTED),
-                        new PlayerRegistration("P3", 3, "P3", PlayerControllerType.SCRIPTED),
-                        new PlayerRegistration("P4", 4, "P4", PlayerControllerType.SCRIPTED),
-                        new PlayerRegistration("P5", 5, "P5", PlayerControllerType.SCRIPTED))
+                scriptedPlayers(playerCount)
         );
     }
 
@@ -127,7 +121,89 @@ public final class ScriptedAvalonFixture {
                         true,
                         true,
                         true,
-                        List.of())
+                        List.of()),
+                "MORDRED", new RoleDefinition(
+                        "MORDRED",
+                        "Mordred",
+                        Camp.EVIL,
+                        "Hidden from Merlin while still coordinating with the evil team.",
+                        List.of(new KnowledgeRuleDefinition(KnowledgeRuleType.SEE_ALLIED_EVIL_PLAYERS, null, List.of(), List.of("OBERON"))),
+                        List.of(),
+                        true,
+                        true,
+                        true,
+                        false,
+                        List.of("HIDDEN_FROM_MERLIN")),
+                "OBERON", new RoleDefinition(
+                        "OBERON",
+                        "Oberon",
+                        Camp.EVIL,
+                        "Evil but isolated from the rest of the evil team.",
+                        List.of(),
+                        List.of(),
+                        true,
+                        true,
+                        true,
+                        false,
+                        List.of("HIDDEN_FROM_EVIL"))
         );
+    }
+
+    private static List<PlayerRegistration> scriptedPlayers(int playerCount) {
+        List<PlayerRegistration> players = new ArrayList<>();
+        for (int seatNo = 1; seatNo <= playerCount; seatNo++) {
+            players.add(new PlayerRegistration("P" + seatNo, seatNo, "P" + seatNo, PlayerControllerType.SCRIPTED));
+        }
+        return List.copyOf(players);
+    }
+
+    private static List<RoundTeamSizeRule> teamSizeRules(int playerCount) {
+        return switch (playerCount) {
+            case 5 -> List.of(
+                    new RoundTeamSizeRule(1, 2),
+                    new RoundTeamSizeRule(2, 3),
+                    new RoundTeamSizeRule(3, 2),
+                    new RoundTeamSizeRule(4, 3),
+                    new RoundTeamSizeRule(5, 3));
+            case 6 -> List.of(
+                    new RoundTeamSizeRule(1, 2),
+                    new RoundTeamSizeRule(2, 3),
+                    new RoundTeamSizeRule(3, 4),
+                    new RoundTeamSizeRule(4, 3),
+                    new RoundTeamSizeRule(5, 4));
+            case 7 -> List.of(
+                    new RoundTeamSizeRule(1, 2),
+                    new RoundTeamSizeRule(2, 3),
+                    new RoundTeamSizeRule(3, 3),
+                    new RoundTeamSizeRule(4, 4),
+                    new RoundTeamSizeRule(5, 4));
+            case 8, 9, 10 -> List.of(
+                    new RoundTeamSizeRule(1, 3),
+                    new RoundTeamSizeRule(2, 4),
+                    new RoundTeamSizeRule(3, 4),
+                    new RoundTeamSizeRule(4, 5),
+                    new RoundTeamSizeRule(5, 5));
+            default -> throw new IllegalArgumentException("Unsupported player count: " + playerCount);
+        };
+    }
+
+    private static Map<Integer, Integer> failThresholds(int playerCount) {
+        return switch (playerCount) {
+            case 5, 6 -> Map.of(1, 1, 2, 1, 3, 1, 4, 1, 5, 1);
+            case 7, 8, 9, 10 -> Map.of(1, 1, 2, 1, 3, 1, 4, 2, 5, 1);
+            default -> throw new IllegalArgumentException("Unsupported player count: " + playerCount);
+        };
+    }
+
+    private static List<String> roleIds(int playerCount) {
+        return switch (playerCount) {
+            case 5 -> List.of("MERLIN", "PERCIVAL", "LOYAL_SERVANT", "MORGANA", "ASSASSIN");
+            case 6 -> List.of("MERLIN", "PERCIVAL", "LOYAL_SERVANT", "LOYAL_SERVANT", "MORGANA", "ASSASSIN");
+            case 7 -> List.of("MERLIN", "PERCIVAL", "LOYAL_SERVANT", "LOYAL_SERVANT", "MORGANA", "ASSASSIN", "MORDRED");
+            case 8 -> List.of("MERLIN", "PERCIVAL", "LOYAL_SERVANT", "LOYAL_SERVANT", "LOYAL_SERVANT", "MORGANA", "ASSASSIN", "MORDRED");
+            case 9 -> List.of("MERLIN", "PERCIVAL", "LOYAL_SERVANT", "LOYAL_SERVANT", "LOYAL_SERVANT", "LOYAL_SERVANT", "MORGANA", "ASSASSIN", "MORDRED");
+            case 10 -> List.of("MERLIN", "PERCIVAL", "LOYAL_SERVANT", "LOYAL_SERVANT", "LOYAL_SERVANT", "LOYAL_SERVANT", "MORGANA", "ASSASSIN", "MORDRED", "OBERON");
+            default -> throw new IllegalArgumentException("Unsupported player count: " + playerCount);
+        };
     }
 }

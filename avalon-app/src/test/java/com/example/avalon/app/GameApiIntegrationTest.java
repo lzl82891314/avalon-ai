@@ -3,6 +3,7 @@ package com.example.avalon.app;
 import com.example.avalon.api.dto.CreateGameRequest;
 import com.example.avalon.persistence.model.AuditRecord;
 import com.example.avalon.persistence.store.AuditRecordStore;
+import com.example.avalon.runtime.model.GameRuntimeState;
 import com.example.avalon.runtime.service.GameSessionService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -14,6 +15,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Set;
 
@@ -296,15 +298,15 @@ class GameApiIntegrationTest {
                 .andExpect(jsonPath("$.providerOptions.instructionRole").value("system"))
                 .andExpect(jsonPath("$.providerOptions.apiKey").doesNotExist());
 
-        mockMvc.perform(get("/model-profiles/{modelId}", "claude-compatible-template"))
+        mockMvc.perform(get("/model-profiles/{modelId}", "claude-sonnet-4-6"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.provider").value("claude"));
 
-        mockMvc.perform(get("/model-profiles/{modelId}", "glm-compatible-template"))
+        mockMvc.perform(get("/model-profiles/{modelId}", "glm-5"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.provider").value("glm"));
 
-        mockMvc.perform(get("/model-profiles/{modelId}", "qwen-compatible-template"))
+        mockMvc.perform(get("/model-profiles/{modelId}", "qwen3-max-2026-01-23"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.provider").value("qwen"));
 
@@ -382,14 +384,14 @@ class GameApiIntegrationTest {
     }
 
     @Test
-    void runShouldResolveRoleBindingSelectionFromModelCatalog() throws Exception {
+    void runShouldResolveSeatBindingSelectionFromModelCatalog() throws Exception {
         CreateGameRequest request = new CreateGameRequest();
         request.setRuleSetId("avalon-classic-5p-v1");
         request.setSetupTemplateId("classic-5p-v1");
         request.setSeed(88L);
         request.setPlayers(playersWithSingleLlmSeat());
         String modelId = createManagedNoopProfile("managed-noop-role-binding", "deterministic-fallback-role-binding");
-        request.setLlmSelection(roleBindingSelection(modelId));
+        request.setLlmSelection(seatBindingSelection(modelId));
 
         String responseBody = mockMvc.perform(post("/games")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -407,6 +409,52 @@ class GameApiIntegrationTest {
         List<AuditRecord> audits = auditRecordStore.findByGameId(gameId);
         assertThat(audits).isNotEmpty();
         assertThat(audits.get(0).inputContextJson()).contains("\"modelId\":\"" + modelId + "\"");
+    }
+
+    @Test
+    void startShouldKeepSeatBindingsDistinctForRepeatedRolesInSixPlayerGame() throws Exception {
+        CreateGameRequest request = new CreateGameRequest();
+        request.setRuleSetId("avalon-classic-6p-v2");
+        request.setSetupTemplateId("classic-6p-v2");
+        request.setSeed(106L);
+        request.setPlayers(playersWithAllLlmSeats(6));
+
+        LinkedHashMap<Integer, String> seatBindings = new LinkedHashMap<>();
+        for (int seatNo = 1; seatNo <= 6; seatNo++) {
+            String modelId = createManagedNoopProfile(
+                    "managed-noop-seat-" + seatNo,
+                    "deterministic-fallback-seat-" + seatNo
+            );
+            seatBindings.put(seatNo, modelId);
+        }
+        request.setLlmSelection(seatBindingSelection(seatBindings));
+
+        String responseBody = mockMvc.perform(post("/games")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String gameId = objectMapper.readTree(responseBody).get("gameId").asText();
+
+        mockMvc.perform(post("/games/{gameId}/start", gameId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RUNNING"));
+
+        GameRuntimeState state = gameSessionService.require(gameId);
+        List<Integer> loyalServantSeats = state.roleAssignments().values().stream()
+                .filter(assignment -> "LOYAL_SERVANT".equals(assignment.roleId()))
+                .map(assignment -> assignment.seatNo())
+                .sorted()
+                .toList();
+
+        assertThat(loyalServantSeats).hasSize(2);
+        String firstModelId = resolvedModelId(state, loyalServantSeats.get(0));
+        String secondModelId = resolvedModelId(state, loyalServantSeats.get(1));
+        assertThat(firstModelId).isEqualTo(seatBindings.get(loyalServantSeats.get(0)));
+        assertThat(secondModelId).isEqualTo(seatBindings.get(loyalServantSeats.get(1)));
+        assertThat(firstModelId).isNotEqualTo(secondModelId);
     }
 
     @Test
@@ -515,8 +563,12 @@ class GameApiIntegrationTest {
     }
 
     private List<CreateGameRequest.PlayerSlotRequest> players() {
+        return players(5);
+    }
+
+    private List<CreateGameRequest.PlayerSlotRequest> players(int playerCount) {
         List<CreateGameRequest.PlayerSlotRequest> players = new ArrayList<>();
-        for (int seatNo = 1; seatNo <= 5; seatNo++) {
+        for (int seatNo = 1; seatNo <= playerCount; seatNo++) {
             CreateGameRequest.PlayerSlotRequest player = new CreateGameRequest.PlayerSlotRequest();
             player.setSeatNo(seatNo);
             player.setDisplayName("P" + seatNo);
@@ -530,6 +582,15 @@ class GameApiIntegrationTest {
         List<CreateGameRequest.PlayerSlotRequest> players = players();
         players.get(0).setControllerType("LLM");
         players.get(0).setAgentConfig(new com.example.avalon.agent.model.PlayerAgentConfig());
+        return players;
+    }
+
+    private List<CreateGameRequest.PlayerSlotRequest> playersWithAllLlmSeats(int playerCount) {
+        List<CreateGameRequest.PlayerSlotRequest> players = players(playerCount);
+        for (CreateGameRequest.PlayerSlotRequest player : players) {
+            player.setControllerType("LLM");
+            player.setAgentConfig(new com.example.avalon.agent.model.PlayerAgentConfig());
+        }
         return players;
     }
 
@@ -553,6 +614,20 @@ class GameApiIntegrationTest {
         return modelId;
     }
 
+    private CreateGameRequest.LlmSelectionRequest seatBindingSelection(String modelId) {
+        CreateGameRequest.LlmSelectionRequest llmSelection = new CreateGameRequest.LlmSelectionRequest();
+        llmSelection.setMode("SEAT_BINDING");
+        llmSelection.getSeatBindings().put(1, modelId);
+        return llmSelection;
+    }
+
+    private CreateGameRequest.LlmSelectionRequest seatBindingSelection(LinkedHashMap<Integer, String> seatBindings) {
+        CreateGameRequest.LlmSelectionRequest llmSelection = new CreateGameRequest.LlmSelectionRequest();
+        llmSelection.setMode("SEAT_BINDING");
+        llmSelection.setSeatBindings(seatBindings);
+        return llmSelection;
+    }
+
     private CreateGameRequest.LlmSelectionRequest roleBindingSelection(String modelId) {
         CreateGameRequest.LlmSelectionRequest llmSelection = new CreateGameRequest.LlmSelectionRequest();
         llmSelection.setMode("ROLE_BINDING");
@@ -562,6 +637,12 @@ class GameApiIntegrationTest {
         llmSelection.getRoleBindings().put("MORGANA", modelId);
         llmSelection.getRoleBindings().put("ASSASSIN", modelId);
         return llmSelection;
+    }
+
+    private String resolvedModelId(GameRuntimeState state, int seatNo) {
+        String playerId = state.playerBySeat(seatNo).playerId();
+        JsonNode modelProfile = objectMapper.valueToTree(state.resolvedLlmControllerConfigOf(playerId).get("modelProfile"));
+        return modelProfile.path("modelId").asText();
     }
 }
 

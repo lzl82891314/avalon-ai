@@ -2,6 +2,7 @@ package com.example.avalon.app.config;
 
 import com.example.avalon.agent.controller.LlmPlayerController;
 import com.example.avalon.agent.gateway.AgentGateway;
+import com.example.avalon.agent.gateway.ModelProfileApiKeyResolver;
 import com.example.avalon.agent.model.PlayerAgentConfig;
 import com.example.avalon.agent.service.AgentTurnRequestFactory;
 import com.example.avalon.agent.service.PromptBuilder;
@@ -18,7 +19,7 @@ import com.example.avalon.persistence.store.GameEventStore;
 import com.example.avalon.persistence.store.GameSnapshotStore;
 import com.example.avalon.persistence.store.PlayerMemorySnapshotStore;
 import com.example.avalon.runtime.controller.PlayerControllerResolver;
-import com.example.avalon.runtime.engine.ClassicFivePlayerGameRuleEngine;
+import com.example.avalon.runtime.engine.ConfigDrivenGameRuleEngine;
 import com.example.avalon.runtime.engine.GameRuleEngine;
 import com.example.avalon.runtime.engine.RoleAssignmentService;
 import com.example.avalon.runtime.engine.VisibilityService;
@@ -31,6 +32,8 @@ import com.example.avalon.runtime.service.GameSessionService;
 import com.example.avalon.runtime.service.ResolvedLlmConfigInitializer;
 import com.example.avalon.runtime.service.TurnContextBuilder;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -47,13 +50,23 @@ public class AvalonApplicationConfig {
     }
 
     @Bean
+    ModelProfileApiKeyResolver modelProfileApiKeyResolver(Environment environment,
+                                                          @Value("${avalon.model-profile-secrets.path:}") String configuredSecretsPath) {
+        return new FileBackedModelProfileApiKeyResolver(
+                resolveSecretsPath(configuredSecretsPath),
+                environment::getProperty,
+                System::getenv
+        );
+    }
+
+    @Bean
     GameSessionService gameSessionService() {
         return new GameSessionService();
     }
 
     @Bean
     GameRuleEngine gameRuleEngine() {
-        return new ClassicFivePlayerGameRuleEngine();
+        return new ConfigDrivenGameRuleEngine();
     }
 
     @Bean
@@ -162,5 +175,27 @@ public class AvalonApplicationConfig {
             }
         }
         throw new IllegalStateException("Unable to locate avalon-app resources directory");
+    }
+
+    private Path resolveSecretsPath(String configuredSecretsPath) {
+        Path projectRoot = resolveProjectRoot();
+        if (configuredSecretsPath == null || configuredSecretsPath.isBlank()) {
+            return projectRoot.resolve("avalon-model-profile-secrets.yml").normalize();
+        }
+        Path configuredPath = Path.of(configuredSecretsPath.trim());
+        return configuredPath.isAbsolute()
+                ? configuredPath.normalize()
+                : projectRoot.resolve(configuredPath).normalize();
+    }
+
+    private Path resolveProjectRoot() {
+        Path current = resolveResourcesPath().toAbsolutePath().normalize();
+        for (int level = 0; level < 4; level++) {
+            current = current.getParent();
+            if (current == null) {
+                throw new IllegalStateException("Unable to resolve project root from avalon-app resources directory");
+            }
+        }
+        return current;
     }
 }

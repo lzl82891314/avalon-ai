@@ -3,6 +3,8 @@ package com.example.avalon.api.service;
 import com.example.avalon.agent.gateway.OpenAiCompatibleMessageAnalysis;
 import com.example.avalon.agent.gateway.OpenAiCompatibleSupport;
 import com.example.avalon.agent.gateway.OpenAiHttpTransport;
+import com.example.avalon.agent.gateway.ModelProfileApiKeyResolver;
+import com.example.avalon.agent.gateway.ModelProfileSecretSupport;
 import com.example.avalon.api.dto.ModelProfileProbeCheckResponse;
 import com.example.avalon.api.dto.ModelProfileProbeRequest;
 import com.example.avalon.api.dto.ModelProfileProbeResponse;
@@ -36,12 +38,15 @@ public class ModelProfileProbeService {
 
     private final ModelProfileCatalogService modelProfileCatalogService;
     private final OpenAiHttpTransport transport;
+    private final ModelProfileApiKeyResolver apiKeyResolver;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
     public ModelProfileProbeService(ModelProfileCatalogService modelProfileCatalogService,
-                                    OpenAiHttpTransport transport) {
+                                    OpenAiHttpTransport transport,
+                                    ModelProfileApiKeyResolver apiKeyResolver) {
         this.modelProfileCatalogService = modelProfileCatalogService;
         this.transport = transport;
+        this.apiKeyResolver = apiKeyResolver;
     }
 
     public ModelProfileProbeResponse probe(String modelId, ModelProfileProbeRequest request) {
@@ -250,24 +255,16 @@ public class ModelProfileProbeService {
 
     private RequestSettings requestSettings(CatalogModelProfile profile) {
         Map<String, Object> providerOptions = profile.providerOptions();
-        String apiKey = OpenAiCompatibleSupport.stringOption(providerOptions, "apiKey");
-        String apiKeyEnv = OpenAiCompatibleSupport.stringOption(providerOptions, "apiKeyEnv");
-        if ((apiKey == null || apiKey.isBlank()) && apiKeyEnv != null && !apiKeyEnv.isBlank()) {
-            apiKey = System.getenv(apiKeyEnv);
-        }
-        if (apiKey == null || apiKey.isBlank()) {
-            apiKey = System.getenv("OPENAI_API_KEY");
-        }
+        String apiKey = apiKeyResolver.resolveApiKey(profile.modelId(), providerOptions);
         if (apiKey == null || apiKey.isBlank()) {
             throw new IllegalStateException(
-                    "OpenAI-compatible provider '" + OpenAiCompatibleSupport.providerId(profile.provider())
-                            + "' requires apiKey, apiKeyEnv, or OPENAI_API_KEY"
+                    ModelProfileSecretSupport.missingApiKeyMessage(profile.provider(), profile.modelId())
             );
         }
         String baseUrl = defaultBaseUrl(OpenAiCompatibleSupport.stringOption(providerOptions, "baseUrl"));
         String organization = OpenAiCompatibleSupport.stringOption(providerOptions, "organization");
         String project = OpenAiCompatibleSupport.stringOption(providerOptions, "project");
-        Duration timeout = timeout(providerOptions.get("timeoutMillis"));
+        Duration timeout = timeout(profile.provider(), providerOptions.get("timeoutMillis"));
         return new RequestSettings(baseUrl, apiKey, organization, project, timeout);
     }
 
@@ -330,14 +327,9 @@ public class ModelProfileProbeService {
                 .orElse(null);
     }
 
-    private Duration timeout(Object rawTimeoutMillis) {
-        if (rawTimeoutMillis instanceof Number number) {
-            return Duration.ofMillis(number.longValue());
-        }
-        if (rawTimeoutMillis instanceof String text && !text.isBlank()) {
-            return Duration.ofMillis(Long.parseLong(text));
-        }
-        return DEFAULT_TIMEOUT;
+    private Duration timeout(String provider, Object rawTimeoutMillis) {
+        Duration timeout = OpenAiCompatibleSupport.effectiveTimeout(provider, rawTimeoutMillis);
+        return timeout == null ? DEFAULT_TIMEOUT : timeout;
     }
 
     private Long elapsedMillis(long startedAt) {

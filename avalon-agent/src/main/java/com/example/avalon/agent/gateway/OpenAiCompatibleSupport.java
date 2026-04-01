@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.net.URI;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.Locale;
@@ -14,9 +15,12 @@ import java.util.regex.Pattern;
 
 public final class OpenAiCompatibleSupport {
     public static final String DEFAULT_BASE_URL = "https://api.openai.com/v1";
+    public static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(30);
+    public static final Duration HIGH_LATENCY_PROVIDER_TIMEOUT = Duration.ofSeconds(60);
     private static final Set<String> SYSTEM_INSTRUCTION_PROVIDERS = Set.of("minimax");
     private static final Set<String> REASONING_SPLIT_PROVIDERS = Set.of("minimax");
     private static final Set<String> HIGH_TOKEN_BUDGET_PROVIDERS = Set.of("minimax", "glm", "claude", "qwen");
+    private static final Set<String> HIGH_LATENCY_TIMEOUT_PROVIDERS = Set.of("minimax", "glm", "claude", "qwen");
     private static final int MIN_STRUCTURED_OUTPUT_MAX_TOKENS = 640;
     private static final Set<String> LOCAL_OPTION_KEYS = Set.of(
             "apiKey",
@@ -92,6 +96,18 @@ public final class OpenAiCompatibleSupport {
             return MIN_STRUCTURED_OUTPUT_MAX_TOKENS;
         }
         return configuredMaxTokens;
+    }
+
+    public static Duration effectiveTimeout(String provider, Object rawTimeoutMillis) {
+        if (rawTimeoutMillis instanceof Number number) {
+            return Duration.ofMillis(number.longValue());
+        }
+        if (rawTimeoutMillis instanceof String text && !text.isBlank()) {
+            return Duration.ofMillis(Long.parseLong(text));
+        }
+        return HIGH_LATENCY_TIMEOUT_PROVIDERS.contains(providerId(provider))
+                ? HIGH_LATENCY_PROVIDER_TIMEOUT
+                : DEFAULT_TIMEOUT;
     }
 
     public static OpenAiCompatibleMessageAnalysis analyzeAssistantMessage(JsonNode message) {

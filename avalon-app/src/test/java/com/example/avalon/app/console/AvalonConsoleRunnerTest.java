@@ -36,14 +36,20 @@ import static org.mockito.Mockito.when;
 class AvalonConsoleRunnerTest {
     private static final long GENERATED_SEED = 246810L;
     private static final SetupTemplate CLASSIC_TEMPLATE = new SetupTemplate(
-            "classic-5p-v1",
+            "classic-5p-v2",
             5,
             true,
             List.of("MERLIN", "PERCIVAL", "LOYAL_SERVANT", "MORGANA", "ASSASSIN")
     );
+    private static final SetupTemplate CLASSIC_SIX_PLAYER_TEMPLATE = new SetupTemplate(
+            "classic-6p-v2",
+            6,
+            true,
+            List.of("MERLIN", "PERCIVAL", "LOYAL_SERVANT", "LOYAL_SERVANT", "MORGANA", "ASSASSIN")
+    );
 
     @Test
-    void buildCreateRequestShouldDefaultToRoleBoundModelPoolWhenUserPressesEnter() {
+    void buildCreateRequestShouldDefaultToSeatBoundModelPoolWhenUserPressesEnter() {
         AvalonConsoleRunner runner = runnerWithProfiles(List.of(profile("openai-gpt-5.4")));
 
         CreateGameRequest request = ReflectionTestUtils.invokeMethod(
@@ -58,11 +64,55 @@ class AvalonConsoleRunnerTest {
                     assertThat(player.getControllerType()).isEqualTo("LLM");
                     assertThat(player.getAgentConfig()).isNotNull();
                 });
+        assertThat(request.getRuleSetId()).isEqualTo("avalon-classic-5p-v2");
+        assertThat(request.getSetupTemplateId()).isEqualTo("classic-5p-v2");
         assertThat(request.getSeed()).isEqualTo(GENERATED_SEED);
         assertThat(request.getLlmSelection()).isNotNull();
-        assertThat(request.getLlmSelection().getMode()).isEqualTo("ROLE_BINDING");
-        assertThat(request.getLlmSelection().getRoleBindings().values())
+        assertThat(request.getLlmSelection().getMode()).isEqualTo("SEAT_BINDING");
+        assertThat(request.getLlmSelection().getSeatBindings())
+                .containsKeys(1, 2, 3, 4, 5);
+        assertThat(request.getLlmSelection().getSeatBindings().values())
                 .containsOnly("openai-gpt-5.4");
+    }
+
+    @Test
+    void buildCreateRequestShouldCreateSevenPlayerGameWhenPlayerCountIsSeven() {
+        AvalonConsoleRunner runner = runnerWithProfiles(List.of(profile("openai-gpt-5.4")));
+
+        CreateGameRequest request = ReflectionTestUtils.invokeMethod(
+                runner,
+                "buildCreateRequest",
+                reader("7" + System.lineSeparator() + blankLines(10))
+        );
+
+        assertThat(request.getRuleSetId()).isEqualTo("avalon-classic-7p-v2");
+        assertThat(request.getSetupTemplateId()).isEqualTo("classic-7p-v2");
+        assertThat(request.getPlayers()).hasSize(7);
+    }
+
+    @Test
+    void promptSeatBindingSelectionShouldCycleProfilesWhenEnabledCountIsBelowSeatCount() {
+        AvalonConsoleRunner runner = runnerWithProfiles(List.of(
+                profile("model-a"),
+                profile("model-b")
+        ));
+
+        CreateGameRequest.LlmSelectionRequest request = ReflectionTestUtils.invokeMethod(
+                runner,
+                "promptSeatBindingSelection",
+                reader(blankLines(6)),
+                List.of(1, 2, 3, 4, 5, 6)
+        );
+
+        assertThat(request.getSeatBindings())
+                .containsExactlyEntriesOf(orderedSeatBindings(
+                        1, "model-a",
+                        2, "model-b",
+                        3, "model-a",
+                        4, "model-b",
+                        5, "model-a",
+                        6, "model-b"
+                ));
     }
 
     @Test
@@ -105,6 +155,33 @@ class AvalonConsoleRunnerTest {
                 "promptRoleBindingSelection",
                 reader(blankLines(5)),
                 CLASSIC_TEMPLATE
+        );
+
+        assertThat(request.getRoleBindings())
+                .containsExactlyEntriesOf(orderedBindings(
+                        "MERLIN", "model-a",
+                        "PERCIVAL", "model-b",
+                        "LOYAL_SERVANT", "model-c",
+                        "MORGANA", "model-d",
+                        "ASSASSIN", "model-e"
+                ));
+    }
+
+    @Test
+    void promptRoleBindingSelectionShouldDeduplicateRepeatedRoles() {
+        AvalonConsoleRunner runner = runnerWithProfiles(List.of(
+                profile("model-a"),
+                profile("model-b"),
+                profile("model-c"),
+                profile("model-d"),
+                profile("model-e")
+        ));
+
+        CreateGameRequest.LlmSelectionRequest request = ReflectionTestUtils.invokeMethod(
+                runner,
+                "promptRoleBindingSelection",
+                reader(blankLines(5)),
+                CLASSIC_SIX_PLAYER_TEMPLATE
         );
 
         assertThat(request.getRoleBindings())
@@ -291,7 +368,32 @@ class AvalonConsoleRunnerTest {
         ConfigurableApplicationContext applicationContext = mock(ConfigurableApplicationContext.class);
 
         when(modelProfileCatalogService.listAll()).thenReturn(profiles);
-        when(configRegistry.requireSetupTemplate("classic-5p-v1")).thenReturn(CLASSIC_TEMPLATE);
+        when(configRegistry.requireSetupTemplate("classic-5p-v2")).thenReturn(CLASSIC_TEMPLATE);
+        when(configRegistry.requireSetupTemplate("classic-6p-v2")).thenReturn(CLASSIC_SIX_PLAYER_TEMPLATE);
+        when(configRegistry.requireSetupTemplate("classic-7p-v2")).thenReturn(new SetupTemplate(
+                "classic-7p-v2",
+                7,
+                true,
+                List.of("MERLIN", "PERCIVAL", "LOYAL_SERVANT", "LOYAL_SERVANT", "MORGANA", "ASSASSIN", "MORDRED")
+        ));
+        when(configRegistry.requireSetupTemplate("classic-8p-v2")).thenReturn(new SetupTemplate(
+                "classic-8p-v2",
+                8,
+                true,
+                List.of("MERLIN", "PERCIVAL", "LOYAL_SERVANT", "LOYAL_SERVANT", "LOYAL_SERVANT", "MORGANA", "ASSASSIN", "MORDRED")
+        ));
+        when(configRegistry.requireSetupTemplate("classic-9p-v2")).thenReturn(new SetupTemplate(
+                "classic-9p-v2",
+                9,
+                true,
+                List.of("MERLIN", "PERCIVAL", "LOYAL_SERVANT", "LOYAL_SERVANT", "LOYAL_SERVANT", "LOYAL_SERVANT", "MORGANA", "ASSASSIN", "MORDRED")
+        ));
+        when(configRegistry.requireSetupTemplate("classic-10p-v2")).thenReturn(new SetupTemplate(
+                "classic-10p-v2",
+                10,
+                true,
+                List.of("MERLIN", "PERCIVAL", "LOYAL_SERVANT", "LOYAL_SERVANT", "LOYAL_SERVANT", "LOYAL_SERVANT", "MORGANA", "ASSASSIN", "MORDRED", "OBERON")
+        ));
 
         return new AvalonConsoleRunner(
                 gameApplicationService,
@@ -435,6 +537,14 @@ class AvalonConsoleRunnerTest {
         Map<String, String> bindings = new LinkedHashMap<>();
         for (int index = 0; index < values.length; index += 2) {
             bindings.put(values[index], values[index + 1]);
+        }
+        return bindings;
+    }
+
+    private Map<Integer, String> orderedSeatBindings(Object... values) {
+        Map<Integer, String> bindings = new LinkedHashMap<>();
+        for (int index = 0; index < values.length; index += 2) {
+            bindings.put((Integer) values[index], (String) values[index + 1]);
         }
         return bindings;
     }

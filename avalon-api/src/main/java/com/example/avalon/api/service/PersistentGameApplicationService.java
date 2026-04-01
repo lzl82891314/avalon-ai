@@ -33,6 +33,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -114,6 +115,7 @@ public class PersistentGameApplicationService implements GameApplicationService 
 
         Map<String, Object> publicState = new LinkedHashMap<>();
         publicState.put("leaderSeat", state.currentLeaderSeat());
+        publicState.put("playerCount", state.playerCount());
         publicState.put("failedTeamVoteCount", state.failedTeamVoteCount());
         publicState.put("approvedMissionRounds", state.approvedMissionRounds());
         publicState.put("failedMissionRounds", state.failedMissionRounds());
@@ -169,13 +171,9 @@ public class PersistentGameApplicationService implements GameApplicationService 
         SetupTemplate setupTemplate = configRegistry.requireSetupTemplate(request.getSetupTemplateId());
         long effectiveSeed = Optional.ofNullable(request.getSeed()).orElseGet(seedGenerator::nextSeed);
         List<PlayerRegistration> players = new ArrayList<>();
-        int llmPlayerCount = 0;
         int playerIndex = 1;
         for (CreateGameRequest.PlayerSlotRequest playerRequest : request.getPlayers()) {
             PlayerControllerType controllerType = PlayerControllerType.valueOf(Optional.ofNullable(playerRequest.getControllerType()).orElse("SCRIPTED"));
-            if (controllerType == PlayerControllerType.LLM) {
-                llmPlayerCount++;
-            }
             players.add(new PlayerRegistration(
                     "P" + playerIndex,
                     Optional.ofNullable(playerRequest.getSeatNo()).orElse(playerIndex),
@@ -184,7 +182,7 @@ public class PersistentGameApplicationService implements GameApplicationService 
                     playerRequest.getAgentConfig() == null ? Map.of() : objectMapper.convertValue(playerRequest.getAgentConfig(), new TypeReference<Map<String, Object>>() { })));
             playerIndex++;
         }
-        LlmSelectionConfig llmSelectionConfig = toLlmSelectionConfig(request.getLlmSelection(), setupTemplate, llmPlayerCount);
+        LlmSelectionConfig llmSelectionConfig = toLlmSelectionConfig(request.getLlmSelection(), setupTemplate, players);
         return new GameSetup(
                 gameId,
                 request.getRuleSetId(),
@@ -200,24 +198,52 @@ public class PersistentGameApplicationService implements GameApplicationService 
 
     private LlmSelectionConfig toLlmSelectionConfig(CreateGameRequest.LlmSelectionRequest request,
                                                     SetupTemplate setupTemplate,
-                                                    int llmPlayerCount) {
+                                                    List<PlayerRegistration> players) {
         if (request == null || request.getMode() == null || request.getMode().isBlank()) {
             return LlmSelectionConfig.none();
         }
+        List<PlayerRegistration> llmPlayers = players.stream()
+                .filter(player -> player.controllerType() == PlayerControllerType.LLM)
+                .toList();
+        int llmPlayerCount = llmPlayers.size();
         if (llmPlayerCount == 0) {
             throw new IllegalArgumentException("llmSelection requires at least one LLM player");
         }
         LlmSelectionMode mode = LlmSelectionMode.valueOf(request.getMode().trim().toUpperCase());
         return switch (mode) {
             case NONE -> LlmSelectionConfig.none();
+            case SEAT_BINDING -> seatBindingSelection(request, llmPlayers);
             case ROLE_BINDING -> roleBindingSelection(request, setupTemplate);
             case RANDOM_POOL -> randomPoolSelection(request, llmPlayerCount);
         };
     }
 
+    private LlmSelectionConfig seatBindingSelection(CreateGameRequest.LlmSelectionRequest request,
+                                                    List<PlayerRegistration> llmPlayers) {
+        Map<Integer, String> seatBindings = new LinkedHashMap<>();
+        for (Map.Entry<Integer, String> entry : request.getSeatBindings().entrySet()) {
+            Integer seatNo = entry.getKey();
+            if (seatNo == null || llmPlayers.stream().noneMatch(player -> player.seatNo() == seatNo)) {
+                throw new IllegalArgumentException("SEAT_BINDING may only reference active LLM seats");
+            }
+        }
+        for (PlayerRegistration player : llmPlayers.stream().sorted((left, right) -> Integer.compare(left.seatNo(), right.seatNo())).toList()) {
+            String modelId = request.getSeatBindings().get(player.seatNo());
+            if (modelId == null || modelId.isBlank()) {
+                throw new IllegalArgumentException("SEAT_BINDING requires modelId for seat " + player.seatNo());
+            }
+            modelProfileCatalogService.requireEnabledProfile(modelId.trim());
+            seatBindings.put(player.seatNo(), modelId.trim());
+        }
+        if (request.getSeatBindings().size() != seatBindings.size()) {
+            throw new IllegalArgumentException("SEAT_BINDING may only reference active LLM seats");
+        }
+        return new LlmSelectionConfig(LlmSelectionMode.SEAT_BINDING, seatBindings, Map.of(), List.of());
+    }
+
     private LlmSelectionConfig roleBindingSelection(CreateGameRequest.LlmSelectionRequest request, SetupTemplate setupTemplate) {
         Map<String, String> roleBindings = new LinkedHashMap<>();
-        for (String roleId : setupTemplate.roleIds()) {
+        for (String roleId : distinctRoleIds(setupTemplate)) {
             String modelId = request.getRoleBindings().get(roleId);
             if (modelId == null || modelId.isBlank()) {
                 throw new IllegalArgumentException("ROLE_BINDING requires modelId for role " + roleId);
@@ -228,7 +254,7 @@ public class PersistentGameApplicationService implements GameApplicationService 
         if (request.getRoleBindings().size() != roleBindings.size()) {
             throw new IllegalArgumentException("ROLE_BINDING may only reference active roles in the setup template");
         }
-        return new LlmSelectionConfig(LlmSelectionMode.ROLE_BINDING, roleBindings, List.of());
+        return new LlmSelectionConfig(LlmSelectionMode.ROLE_BINDING, Map.of(), roleBindings, List.of());
     }
 
     private LlmSelectionConfig randomPoolSelection(CreateGameRequest.LlmSelectionRequest request, int llmPlayerCount) {
@@ -241,7 +267,7 @@ public class PersistentGameApplicationService implements GameApplicationService 
             throw new IllegalArgumentException("RANDOM_POOL requires at least " + llmPlayerCount + " distinct candidateModelIds");
         }
         candidateModelIds.forEach(modelProfileCatalogService::requireEnabledProfile);
-        return new LlmSelectionConfig(LlmSelectionMode.RANDOM_POOL, Map.of(), candidateModelIds);
+        return new LlmSelectionConfig(LlmSelectionMode.RANDOM_POOL, Map.of(), Map.of(), candidateModelIds);
     }
 
     private Map<String, RoleDefinition> roleDefinitionsFor(SetupTemplate setupTemplate) {
@@ -325,7 +351,7 @@ public class PersistentGameApplicationService implements GameApplicationService 
                     yield state.playerBySeat(state.currentProposalTeam().get(state.missionIndex())).playerId();
                 }
                 case ASSASSINATION -> state.roleAssignments().values().stream()
-                        .filter(assignment -> "ASSASSIN".equals(assignment.roleId()))
+                        .filter(assignment -> assignment.roleId().equals(state.setup().ruleSetDefinition().assassinationRule().assassinRoleId()))
                         .map(assignment -> assignment.playerId())
                         .findFirst()
                         .orElse(null);
@@ -361,5 +387,9 @@ public class PersistentGameApplicationService implements GameApplicationService 
         } catch (Exception e) {
             throw new IllegalStateException("Failed to deserialize payload JSON", e);
         }
+    }
+
+    private List<String> distinctRoleIds(SetupTemplate setupTemplate) {
+        return new ArrayList<>(new LinkedHashSet<>(setupTemplate.roleIds()));
     }
 }

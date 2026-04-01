@@ -118,6 +118,10 @@ public class ClassicAvalonRuleEngine implements GameRuleEngine {
                 if (!session.currentTeamPlayerIds().contains(actorPlayerId)) {
                     throw new GameRuleViolationException("Only team members may submit mission actions");
                 }
+                if (missionAction.choice() == MissionChoice.FAIL
+                        && context.roleDefinitionByPlayerId(actorPlayerId).camp() != Camp.EVIL) {
+                    throw new GameRuleViolationException("Good players may not submit FAIL mission actions");
+                }
             }
             case ASSASSINATION -> {
                 if (!(action instanceof AssassinationAction assassinationAction)) {

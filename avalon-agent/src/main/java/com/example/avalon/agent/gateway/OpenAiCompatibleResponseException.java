@@ -12,6 +12,16 @@ public final class OpenAiCompatibleResponseException extends IllegalStateExcepti
                                              String modelName,
                                              String finishReason,
                                              OpenAiCompatibleMessageAnalysis analysis) {
+        this(message, cause, provider, modelName, finishReason, analysis, Map.of());
+    }
+
+    public OpenAiCompatibleResponseException(String message,
+                                             Throwable cause,
+                                             String provider,
+                                             String modelName,
+                                             String finishReason,
+                                             OpenAiCompatibleMessageAnalysis analysis,
+                                             Map<String, Object> extraDiagnostics) {
         super(message, cause);
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("provider", provider);
@@ -20,6 +30,9 @@ public final class OpenAiCompatibleResponseException extends IllegalStateExcepti
         putIfNotBlank(payload, "finishReason", finishReason);
         if (analysis != null) {
             payload.putAll(analysis.diagnostics());
+        }
+        if (extraDiagnostics != null && !extraDiagnostics.isEmpty()) {
+            payload.putAll(extraDiagnostics);
         }
         this.diagnostics = Map.copyOf(payload);
     }

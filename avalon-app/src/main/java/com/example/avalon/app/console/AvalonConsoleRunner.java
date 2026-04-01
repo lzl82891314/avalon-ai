@@ -40,9 +40,9 @@ import java.util.Objects;
 @Component
 @ConditionalOnProperty(prefix = "avalon.console", name = "enabled", havingValue = "true")
 public class AvalonConsoleRunner implements ApplicationRunner {
-    private static final String DEFAULT_RULE_SET_ID = "avalon-classic-5p-v1";
-    private static final String DEFAULT_SETUP_TEMPLATE_ID = "classic-5p-v1";
-    private static final int PLAYER_COUNT = 5;
+    private static final int DEFAULT_PLAYER_COUNT = 5;
+    private static final int MIN_PLAYER_COUNT = 5;
+    private static final int MAX_PLAYER_COUNT = 10;
 
     private final GameApplicationService gameApplicationService;
     private final ModelProfileCatalogService modelProfileCatalogService;
@@ -214,24 +214,30 @@ public class AvalonConsoleRunner implements ApplicationRunner {
 
     private CreateGameRequest buildCreateRequest(BufferedReader reader) throws IOException {
         CreateGameRequest request = new CreateGameRequest();
-        request.setRuleSetId(promptString(reader, "规则集 [" + DEFAULT_RULE_SET_ID + "]：", DEFAULT_RULE_SET_ID));
-        request.setSetupTemplateId(promptString(reader, "配置模板 [" + DEFAULT_SETUP_TEMPLATE_ID + "]：", DEFAULT_SETUP_TEMPLATE_ID));
+        int playerCount = promptPlayerCount(reader);
+        ClassicSetupSelection selection = classicSetupSelection(playerCount);
+        request.setRuleSetId(selection.ruleSetId());
+        request.setSetupTemplateId(selection.setupTemplateId());
         request.setSeed(promptOptionalLong(reader, "随机种子 [留空自动生成]："));
-        SetupTemplate setupTemplate = configRegistry.requireSetupTemplate(request.getSetupTemplateId());
+        SetupTemplate setupTemplate = configRegistry.requireSetupTemplate(selection.setupTemplateId());
 
         SeatPreset preset = promptPreset(reader);
         CreateRequestDraft draft = switch (preset) {
-            case SCRIPTED -> new CreateRequestDraft(scriptedSeats(), null);
-            case NOOP_LLM -> new CreateRequestDraft(noopLlmSeats(), null);
+            case SCRIPTED -> new CreateRequestDraft(scriptedSeats(playerCount), null);
+            case NOOP_LLM -> new CreateRequestDraft(noopLlmSeats(playerCount), null);
+            case SEAT_BOUND_MODEL_POOL -> new CreateRequestDraft(
+                    modelPoolLlmSeats(playerCount),
+                    promptSeatBindingSelection(reader, seatNumbers(playerCount))
+            );
             case ROLE_BOUND_MODEL_POOL -> new CreateRequestDraft(
-                    modelPoolLlmSeats(),
+                    modelPoolLlmSeats(playerCount),
                     promptRoleBindingSelection(reader, setupTemplate)
             );
             case RANDOM_MODEL_POOL -> new CreateRequestDraft(
-                    modelPoolLlmSeats(),
-                    promptRandomPoolSelection(reader, PLAYER_COUNT)
+                    modelPoolLlmSeats(playerCount),
+                    promptRandomPoolSelection(reader, playerCount)
             );
-            case CUSTOM -> promptCustomSeats(reader, setupTemplate);
+            case CUSTOM -> promptCustomSeats(reader, setupTemplate, playerCount);
         };
 
         List<CreateGameRequest.PlayerSlotRequest> players = new ArrayList<>();
@@ -248,11 +254,27 @@ public class AvalonConsoleRunner implements ApplicationRunner {
         return request;
     }
 
+    private int promptPlayerCount(BufferedReader reader) throws IOException {
+        while (true) {
+            String raw = promptString(reader, "参与人数 [" + DEFAULT_PLAYER_COUNT + "]：", String.valueOf(DEFAULT_PLAYER_COUNT));
+            try {
+                int value = Integer.parseInt(raw);
+                if (value < MIN_PLAYER_COUNT || value > MAX_PLAYER_COUNT) {
+                    System.out.println("只支持 " + MIN_PLAYER_COUNT + " 到 " + MAX_PLAYER_COUNT + " 人局。");
+                    continue;
+                }
+                return value;
+            } catch (NumberFormatException ignored) {
+                System.out.println("请输入合法的人数。");
+            }
+        }
+    }
+
     private SeatPreset promptPreset(BufferedReader reader) throws IOException {
         while (true) {
             String raw = promptString(reader,
-                    "席位预设 [custom/scripted/noop/role/random]（默认 role）：",
-                    "role").toLowerCase(Locale.ROOT);
+                    "席位预设 [custom/scripted/noop/seat/role/random]（默认 seat）：",
+                    "seat").toLowerCase(Locale.ROOT);
             switch (raw) {
                 case "custom", "c" -> {
                     return SeatPreset.CUSTOM;
@@ -263,71 +285,74 @@ public class AvalonConsoleRunner implements ApplicationRunner {
                 case "noop", "n", "llm", "llm-noop" -> {
                     return SeatPreset.NOOP_LLM;
                 }
+                case "seat", "seat-binding", "player", "p", "catalog-seat" -> {
+                    return SeatPreset.SEAT_BOUND_MODEL_POOL;
+                }
                 case "role", "r", "catalog-role" -> {
                     return SeatPreset.ROLE_BOUND_MODEL_POOL;
                 }
                 case "random", "rand", "catalog-random" -> {
                     return SeatPreset.RANDOM_MODEL_POOL;
                 }
-                case "openai", "o" -> System.out.println("控制台不再逐局录入原始 OpenAI 参数。请改用 model profile，并选择 `role` 或 `random`。");
-                default -> System.out.println("无效预设。可选 custom、scripted、noop、role、random。");
+                case "openai", "o" -> System.out.println("控制台不再逐局录入原始 OpenAI 参数。请改用 model profile，并选择 `seat`、`role` 或 `random`。");
+                default -> System.out.println("无效预设。可选 custom、scripted、noop、seat、role、random。");
             }
         }
     }
 
-    private List<SeatInput> scriptedSeats() {
+    private List<SeatInput> scriptedSeats(int playerCount) {
         List<SeatInput> seats = new ArrayList<>();
-        for (int seatNo = 1; seatNo <= PLAYER_COUNT; seatNo++) {
+        for (int seatNo = 1; seatNo <= playerCount; seatNo++) {
             seats.add(new SeatInput(seatNo, "P" + seatNo, "SCRIPTED", null));
         }
         return seats;
     }
 
-    private List<SeatInput> noopLlmSeats() {
+    private List<SeatInput> noopLlmSeats(int playerCount) {
         List<SeatInput> seats = new ArrayList<>();
-        for (int seatNo = 1; seatNo <= PLAYER_COUNT; seatNo++) {
+        for (int seatNo = 1; seatNo <= playerCount; seatNo++) {
             seats.add(new SeatInput(seatNo, "P" + seatNo, "LLM", defaultNoopLlmConfig()));
         }
         return seats;
     }
 
-    private List<SeatInput> modelPoolLlmSeats() {
+    private List<SeatInput> modelPoolLlmSeats(int playerCount) {
         List<SeatInput> seats = new ArrayList<>();
-        for (int seatNo = 1; seatNo <= PLAYER_COUNT; seatNo++) {
+        for (int seatNo = 1; seatNo <= playerCount; seatNo++) {
             seats.add(new SeatInput(seatNo, "P" + seatNo, "LLM", defaultModelPoolLlmConfig()));
         }
         return seats;
     }
 
-    private CreateRequestDraft promptCustomSeats(BufferedReader reader, SetupTemplate setupTemplate) throws IOException {
+    private CreateRequestDraft promptCustomSeats(BufferedReader reader, SetupTemplate setupTemplate, int playerCount) throws IOException {
         List<SeatInput> seats = new ArrayList<>();
         List<SeatMode> modes = new ArrayList<>();
         List<String> displayNames = new ArrayList<>();
-        int modelPoolSeatCount = 0;
+        List<Integer> modelPoolSeatNos = new ArrayList<>();
         int noopSeatCount = 0;
 
-        for (int seatNo = 1; seatNo <= PLAYER_COUNT; seatNo++) {
+        for (int seatNo = 1; seatNo <= playerCount; seatNo++) {
             String defaultName = "P" + seatNo;
             String displayName = promptString(reader, seatNo + "号位显示名 [" + defaultName + "]：", defaultName);
             SeatMode mode = promptSeatMode(reader, seatNo);
             displayNames.add(displayName);
             modes.add(mode);
             if (mode == SeatMode.MODEL_POOL_LLM) {
-                modelPoolSeatCount++;
+                modelPoolSeatNos.add(seatNo);
             }
             if (mode == SeatMode.NOOP_LLM) {
                 noopSeatCount++;
             }
         }
 
-        if (modelPoolSeatCount > 0 && noopSeatCount > 0) {
+        if (!modelPoolSeatNos.isEmpty() && noopSeatCount > 0) {
             throw new IllegalArgumentException("控制台暂不支持在同一局里混用 noop LLM 和模型池 LLM。请二选一，或改用 server 模式。");
         }
 
-        CreateGameRequest.LlmSelectionRequest llmSelection = modelPoolSeatCount > 0
-                ? promptSelectionMode(reader, setupTemplate, modelPoolSeatCount)
+        CreateGameRequest.LlmSelectionRequest llmSelection = !modelPoolSeatNos.isEmpty()
+                ? promptSelectionMode(reader, setupTemplate, modelPoolSeatNos)
                 : null;
-        for (int index = 0; index < PLAYER_COUNT; index++) {
+        for (int index = 0; index < playerCount; index++) {
             int seatNo = index + 1;
             SeatMode mode = modes.get(index);
             String displayName = displayNames.get(index);
@@ -377,27 +402,50 @@ public class AvalonConsoleRunner implements ApplicationRunner {
 
     private CreateGameRequest.LlmSelectionRequest promptSelectionMode(BufferedReader reader,
                                                                       SetupTemplate setupTemplate,
-                                                                      int llmSeatCount) throws IOException {
+                                                                      List<Integer> llmSeatNos) throws IOException {
         while (true) {
-            String raw = promptString(reader, "LLM 选模方式 [role/random]（默认 role）：", "role").toLowerCase(Locale.ROOT);
+            String raw = promptString(reader, "LLM 选模方式 [seat/role/random]（默认 seat）：", "seat").toLowerCase(Locale.ROOT);
             switch (raw) {
+                case "seat", "seat-binding", "player", "p" -> {
+                    return promptSeatBindingSelection(reader, llmSeatNos);
+                }
                 case "role", "r" -> {
                     return promptRoleBindingSelection(reader, setupTemplate);
                 }
                 case "random", "rand" -> {
-                    return promptRandomPoolSelection(reader, llmSeatCount);
+                    return promptRandomPoolSelection(reader, llmSeatNos.size());
                 }
-                default -> System.out.println("无效选模方式。可选 role 或 random。");
+                default -> System.out.println("无效选模方式。可选 seat、role 或 random。");
             }
         }
+    }
+
+    private CreateGameRequest.LlmSelectionRequest promptSeatBindingSelection(BufferedReader reader,
+                                                                             List<Integer> llmSeatNos) throws IOException {
+        List<ModelProfileResponse> profiles = availableModelProfiles();
+        printModelProfiles(profiles);
+        List<String> defaultModelIds = defaultBindingModelIds(profiles, llmSeatNos.size());
+        printDefaultSeatBindings(llmSeatNos, defaultModelIds);
+        CreateGameRequest.LlmSelectionRequest request = new CreateGameRequest.LlmSelectionRequest();
+        request.setMode("SEAT_BINDING");
+        for (int index = 0; index < llmSeatNos.size(); index++) {
+            Integer seatNo = llmSeatNos.get(index);
+            String defaultModelId = defaultModelIds.get(index);
+            String modelId = promptModelId(reader,
+                    profiles,
+                    seatNo + "号位使用的 modelId [" + defaultModelId + "]：",
+                    defaultModelId);
+            request.getSeatBindings().put(seatNo, modelId);
+        }
+        return request;
     }
 
     private CreateGameRequest.LlmSelectionRequest promptRoleBindingSelection(BufferedReader reader,
                                                                              SetupTemplate setupTemplate) throws IOException {
         List<ModelProfileResponse> profiles = availableModelProfiles();
         printModelProfiles(profiles);
-        List<String> roleIds = setupTemplate.roleIds();
-        List<String> defaultModelIds = defaultRoleBindingModelIds(profiles, roleIds.size());
+        List<String> roleIds = distinctRoleIds(setupTemplate);
+        List<String> defaultModelIds = defaultBindingModelIds(profiles, roleIds.size());
         printDefaultRoleBindings(roleIds, defaultModelIds);
         CreateGameRequest.LlmSelectionRequest request = new CreateGameRequest.LlmSelectionRequest();
         request.setMode("ROLE_BINDING");
@@ -453,12 +501,20 @@ public class AvalonConsoleRunner implements ApplicationRunner {
         }
     }
 
-    private List<String> defaultRoleBindingModelIds(List<ModelProfileResponse> profiles, int requiredCount) {
+    private List<String> defaultBindingModelIds(List<ModelProfileResponse> profiles, int requiredCount) {
         List<String> defaultModelIds = new ArrayList<>();
         for (int index = 0; index < requiredCount; index++) {
             defaultModelIds.add(profiles.get(index % profiles.size()).getModelId());
         }
         return defaultModelIds;
+    }
+
+    private void printDefaultSeatBindings(List<Integer> seatNos, List<String> defaultModelIds) {
+        System.out.println("默认座位绑定：");
+        for (int index = 0; index < seatNos.size(); index++) {
+            System.out.println("  - " + seatNos.get(index) + "号位 -> " + defaultModelIds.get(index));
+        }
+        System.out.println("直接回车即可接受每个座位的默认值。");
     }
 
     private void printDefaultRoleBindings(List<String> roleIds, List<String> defaultModelIds) {
@@ -563,7 +619,7 @@ public class AvalonConsoleRunner implements ApplicationRunner {
 
     private void printAllPlayerViews() {
         ensureActiveGame();
-        for (int seatNo = 1; seatNo <= PLAYER_COUNT; seatNo++) {
+        for (int seatNo = 1; seatNo <= activePlayerCount(); seatNo++) {
             String playerId = "P" + seatNo;
             PlayerPrivateViewResponse view = gameApplicationService.getPlayerView(session.gameId(), playerId);
             System.out.println(printer.formatPlayerView(playerId, view, session));
@@ -686,7 +742,7 @@ public class AvalonConsoleRunner implements ApplicationRunner {
 
     private List<ConsoleDecisionPlayer> loadDecisionReportPlayers() {
         List<ConsoleDecisionPlayer> players = new ArrayList<>();
-        for (int seatNo = 1; seatNo <= PLAYER_COUNT; seatNo++) {
+        for (int seatNo = 1; seatNo <= activePlayerCount(); seatNo++) {
             String playerId = "P" + seatNo;
             PlayerPrivateViewResponse view = gameApplicationService.getPlayerView(session.gameId(), playerId);
             players.add(new ConsoleDecisionPlayer(
@@ -699,6 +755,49 @@ public class AvalonConsoleRunner implements ApplicationRunner {
             ));
         }
         return players;
+    }
+
+    private int activePlayerCount() {
+        if (!session.seats().isEmpty()) {
+            return session.seats().size();
+        }
+        GameStateResponse state = gameApplicationService.getState(ensureActiveGame());
+        Object rawPlayerCount = state.getPublicState() == null ? null : state.getPublicState().get("playerCount");
+        return parsePositiveInt(rawPlayerCount, DEFAULT_PLAYER_COUNT);
+    }
+
+    private int parsePositiveInt(Object value, int defaultValue) {
+        if (value instanceof Number number) {
+            return number.intValue() > 0 ? number.intValue() : defaultValue;
+        }
+        if (value instanceof String string && !string.isBlank()) {
+            try {
+                int parsed = Integer.parseInt(string.trim());
+                return parsed > 0 ? parsed : defaultValue;
+            } catch (NumberFormatException ignored) {
+                return defaultValue;
+            }
+        }
+        return defaultValue;
+    }
+
+    private List<String> distinctRoleIds(SetupTemplate setupTemplate) {
+        return setupTemplate.roleIds().stream().distinct().toList();
+    }
+
+    private List<Integer> seatNumbers(int playerCount) {
+        List<Integer> seatNos = new ArrayList<>();
+        for (int seatNo = 1; seatNo <= playerCount; seatNo++) {
+            seatNos.add(seatNo);
+        }
+        return seatNos;
+    }
+
+    private ClassicSetupSelection classicSetupSelection(int playerCount) {
+        return new ClassicSetupSelection(
+                "avalon-classic-%sp-v2".formatted(playerCount),
+                "classic-%sp-v2".formatted(playerCount)
+        );
     }
 
     private String displayNameForReport(String playerId) {
@@ -784,6 +883,7 @@ public class AvalonConsoleRunner implements ApplicationRunner {
         CUSTOM,
         SCRIPTED,
         NOOP_LLM,
+        SEAT_BOUND_MODEL_POOL,
         ROLE_BOUND_MODEL_POOL,
         RANDOM_MODEL_POOL
     }
@@ -798,5 +898,8 @@ public class AvalonConsoleRunner implements ApplicationRunner {
     }
 
     private record CreateRequestDraft(List<SeatInput> seatInputs, CreateGameRequest.LlmSelectionRequest llmSelection) {
+    }
+
+    private record ClassicSetupSelection(String ruleSetId, String setupTemplateId) {
     }
 }

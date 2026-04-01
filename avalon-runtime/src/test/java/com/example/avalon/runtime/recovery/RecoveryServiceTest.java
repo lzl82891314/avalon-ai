@@ -21,7 +21,7 @@ import com.example.avalon.runtime.persistence.RuntimePersistenceService;
 import com.example.avalon.runtime.persistence.RuntimeStateCodec;
 import com.example.avalon.runtime.support.RuntimeTestFixtures;
 import com.example.avalon.runtime.service.GameSessionService;
-import com.example.avalon.runtime.engine.ClassicFivePlayerGameRuleEngine;
+import com.example.avalon.runtime.engine.ConfigDrivenGameRuleEngine;
 import com.example.avalon.runtime.engine.RoleAssignmentService;
 import com.example.avalon.runtime.engine.VisibilityService;
 import org.junit.jupiter.api.Test;
@@ -107,7 +107,7 @@ class RecoveryServiceTest {
         GameSessionService liveSessionService = new GameSessionService();
         GameOrchestrator liveOrchestrator = new GameOrchestrator(
                 liveSessionService,
-                new ClassicFivePlayerGameRuleEngine(),
+                new ConfigDrivenGameRuleEngine(),
                 new RoleAssignmentService(),
                 new VisibilityService(),
                 new PlayerControllerResolver());
@@ -123,7 +123,59 @@ class RecoveryServiceTest {
         GameSessionService recoveredSessionService = new GameSessionService();
         GameOrchestrator recoveredOrchestrator = new GameOrchestrator(
                 recoveredSessionService,
-                new ClassicFivePlayerGameRuleEngine(),
+                new ConfigDrivenGameRuleEngine(),
+                new RoleAssignmentService(),
+                new VisibilityService(),
+                new PlayerControllerResolver());
+        RecoveryService recoveryService = new RecoveryService(snapshotStore, eventStore, memoryStore, codec);
+        RecoveryResult recovered = recoveryService.recover(gameId);
+        recoveredSessionService.save(recovered.state());
+
+        GameRuntimeState resumedFinalState = recoveredOrchestrator.runToEnd(gameId).state();
+
+        assertEquals(expectedFinalState.status(), resumedFinalState.status());
+        assertEquals(expectedFinalState.phase(), resumedFinalState.phase());
+        assertEquals(expectedFinalState.winnerCamp(), resumedFinalState.winnerCamp());
+        assertEquals(expectedFinalState.roundNo(), resumedFinalState.roundNo());
+        assertEquals(expectedFinalState.currentLeaderSeat(), resumedFinalState.currentLeaderSeat());
+        assertEquals(expectedFinalState.approvedMissionRounds(), resumedFinalState.approvedMissionRounds());
+        assertEquals(expectedFinalState.failedMissionRounds(), resumedFinalState.failedMissionRounds());
+        assertEquals(expectedFinalState.events().size(), resumedFinalState.events().size());
+        assertFalse(recovered.eventsAfterSnapshot().isEmpty());
+    }
+
+    @Test
+    void shouldRecoverSevenPlayerGameThenContinueRunningToEnd() {
+        GameSetup setup = RuntimeTestFixtures.classicSetup(7, 456L);
+        GameOrchestrator baselineOrchestrator = new GameOrchestrator();
+        GameRuntimeState expectedFinalState = baselineOrchestrator.runToEnd(setup).state();
+
+        InMemoryGameEventStore eventStore = new InMemoryGameEventStore();
+        InMemoryGameSnapshotStore snapshotStore = new InMemoryGameSnapshotStore();
+        InMemoryPlayerMemorySnapshotStore memoryStore = new InMemoryPlayerMemorySnapshotStore();
+        RuntimeStateCodec codec = new RuntimeStateCodec();
+        RuntimePersistenceService persistenceService = new RuntimePersistenceService(eventStore, snapshotStore, memoryStore, codec, 100);
+
+        GameSessionService liveSessionService = new GameSessionService();
+        GameOrchestrator liveOrchestrator = new GameOrchestrator(
+                liveSessionService,
+                new ConfigDrivenGameRuleEngine(),
+                new RoleAssignmentService(),
+                new VisibilityService(),
+                new PlayerControllerResolver());
+        GameRuntimeState liveState = liveOrchestrator.createGame(setup);
+        persistenceService.persist(liveState);
+
+        String gameId = liveState.generatedGameId();
+        liveOrchestrator.start(gameId);
+        liveOrchestrator.step(gameId);
+        liveOrchestrator.step(gameId);
+        persistenceService.persist(liveSessionService.require(gameId));
+
+        GameSessionService recoveredSessionService = new GameSessionService();
+        GameOrchestrator recoveredOrchestrator = new GameOrchestrator(
+                recoveredSessionService,
+                new ConfigDrivenGameRuleEngine(),
                 new RoleAssignmentService(),
                 new VisibilityService(),
                 new PlayerControllerResolver());

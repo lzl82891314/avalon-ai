@@ -6,6 +6,7 @@ import com.example.avalon.api.dto.CreateGameRequest;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -61,15 +62,6 @@ final class ConsoleGameSession {
         boolean pooledSelectionEnabled = request.getLlmSelection() != null
                 && request.getLlmSelection().getMode() != null
                 && !request.getLlmSelection().getMode().isBlank();
-        if (pooledSelectionEnabled) {
-            llmSelectionSummary = request.getLlmSelection().getMode();
-            if ("ROLE_BINDING".equalsIgnoreCase(request.getLlmSelection().getMode())) {
-                request.getLlmSelection().getRoleBindings().forEach((roleId, modelId) ->
-                        llmSelectionDetails.add(roleId + " -> " + modelId));
-            } else if ("RANDOM_POOL".equalsIgnoreCase(request.getLlmSelection().getMode())) {
-                llmSelectionDetails.add("pool=" + request.getLlmSelection().getCandidateModelIds());
-            }
-        }
 
         int playerIndex = 1;
         for (CreateGameRequest.PlayerSlotRequest player : request.getPlayers()) {
@@ -87,6 +79,20 @@ final class ConsoleGameSession {
             seatsByPlayerId.put(playerId, descriptor);
             seatsBySeatNo.put(seatNo, descriptor);
             playerIndex++;
+        }
+
+        if (pooledSelectionEnabled) {
+            llmSelectionSummary = request.getLlmSelection().getMode();
+            if ("SEAT_BINDING".equalsIgnoreCase(request.getLlmSelection().getMode())) {
+                request.getLlmSelection().getSeatBindings().entrySet().stream()
+                        .sorted(Map.Entry.comparingByKey(Comparator.naturalOrder()))
+                        .forEach(entry -> llmSelectionDetails.add(labelForSeat(entry.getKey()) + " -> " + entry.getValue()));
+            } else if ("ROLE_BINDING".equalsIgnoreCase(request.getLlmSelection().getMode())) {
+                request.getLlmSelection().getRoleBindings().forEach((roleId, modelId) ->
+                        llmSelectionDetails.add(roleId + " -> " + modelId));
+            } else if ("RANDOM_POOL".equalsIgnoreCase(request.getLlmSelection().getMode())) {
+                llmSelectionDetails.add("pool=" + request.getLlmSelection().getCandidateModelIds());
+            }
         }
     }
 

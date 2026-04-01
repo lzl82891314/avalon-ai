@@ -43,9 +43,17 @@ public class ValidationRetryPolicy {
                 return new ValidatedAgentTurn(result, action, attempts, attemptRequest.copy());
             } catch (RuntimeException exception) {
                 lastFailure = exception;
-                if (attempts < DEFAULT_MAX_ATTEMPTS) {
+                if (attempts < DEFAULT_MAX_ATTEMPTS && shouldRetry(exception)) {
                     attemptRequest = nextAttemptRequest(attemptRequest, exception);
+                    continue;
                 }
+                throw new AgentTurnExecutionException(
+                        "Agent turn validation failed after " + attempts + " attempts",
+                        attemptRequest,
+                        lastResult,
+                        attempts,
+                        lastFailure
+                );
             }
         }
         throw new AgentTurnExecutionException(
@@ -60,11 +68,28 @@ public class ValidationRetryPolicy {
     private AgentTurnRequest nextAttemptRequest(AgentTurnRequest request, RuntimeException failure) {
         AgentTurnRequest next = request.copy();
         String correctivePrompt = correctivePrompt(failure, next.getAllowedActions());
-        if (correctivePrompt != null) {
+        if (correctivePrompt != null && !correctivePrompt.isBlank()) {
             next.setPromptText(appendPrompt(next.getPromptText(), correctivePrompt));
             next.setMaxTokens(raisedMaxTokens(next.getMaxTokens()));
         }
         return next;
+    }
+
+    private boolean shouldRetry(RuntimeException failure) {
+        if (failure instanceof CandidateKnowledgeAssertionException) {
+            return true;
+        }
+        if (!(failure instanceof OpenAiCompatibleResponseException responseException)) {
+            return true;
+        }
+        String failureDomain = stringValue(responseException.diagnostics().get("failureDomain"));
+        if ("transport".equalsIgnoreCase(failureDomain)) {
+            return false;
+        }
+        String finishReason = stringValue(responseException.diagnostics().get("finishReason"));
+        String contentShape = stringValue(responseException.diagnostics().get("assistantContentShape"));
+        String message = failure.getMessage() == null ? "" : failure.getMessage();
+        return requiresCompressionRetry(finishReason, contentShape, message);
     }
 
     private int raisedMaxTokens(Integer currentMaxTokens) {

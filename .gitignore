@@ -11,4 +11,4 @@ target/
 *.db
 *.sqlite
 .DS_Store
-
+avalon-model-profile-secrets.yml

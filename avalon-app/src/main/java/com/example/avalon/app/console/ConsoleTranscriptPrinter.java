@@ -45,7 +45,7 @@ public class ConsoleTranscriptPrinter {
                   run            如有需要先启动，再以慢速播放方式运行到结束或暂停
                   report         输出局后决策表，并写入 Markdown 报告
                   state          查看当前公开局面
-                  players        查看全部五名玩家的私有视角
+                  players        查看全部玩家的私有视角
                   player <id>    查看指定玩家的私有视角，例如 `player P1`
                   events         查看原始事件流
                   replay         查看面向阅读的回放投影
@@ -55,9 +55,10 @@ public class ConsoleTranscriptPrinter {
                   exit           退出控制台
 
                 说明
+                  `new` 向导默认支持 5 到 10 人标准阿瓦隆。
                   局后报告默认写入 `target/reports/avalon/<gameId>-decision-report.md`。
                   V1 仍不支持真人实时提交动作。
-                  模型池 LLM 席位通过静态或托管 model profile 选择。
+                  模型池 LLM 席位默认按座位绑定静态或托管 model profile。
                   如果想离线演示，可选择 `noop` 使用确定性回退策略。
                 """;
     }
@@ -499,6 +500,11 @@ public class ConsoleTranscriptPrinter {
             builder.append(System.lineSeparator())
                     .append("  推理预览=").append(reasoningPreview);
         }
+        String transportSummary = transportFailureSummary(rawModelResponse);
+        if (transportSummary != null) {
+            builder.append(System.lineSeparator())
+                    .append("  传输诊断=").append(transportSummary);
+        }
     }
 
     private void appendOptionalSectionWarnings(StringBuilder builder, Map<String, Object> validation) {
@@ -795,6 +801,39 @@ public class ConsoleTranscriptPrinter {
         return stringValue(entry.getErrorMessage());
     }
 
+    private String transportFailureSummary(Map<String, Object> rawModelResponse) {
+        String failureDomain = stringValue(rawModelResponse.get("failureDomain"));
+        if (!"transport".equalsIgnoreCase(failureDomain)) {
+            return null;
+        }
+        List<String> parts = new ArrayList<>();
+        String failureKind = stringValue(rawModelResponse.get("failureKind"));
+        if (failureKind != null) {
+            parts.add("类型=" + failureKind);
+        }
+        Object attempts = rawModelResponse.get("transportAttempts");
+        if (attempts != null) {
+            parts.add("尝试=" + attempts);
+        }
+        Object timeoutMs = rawModelResponse.get("timeoutMs");
+        if (timeoutMs != null) {
+            parts.add("超时=" + timeoutMs + "ms");
+        }
+        Object statusCode = rawModelResponse.get("statusCode");
+        if (statusCode != null) {
+            parts.add("状态=" + statusCode);
+        }
+        String rootClass = stringValue(rawModelResponse.get("rootExceptionClass"));
+        if (rootClass != null) {
+            parts.add("异常=" + rootClass);
+        }
+        String rootMessage = stringValue(rawModelResponse.get("rootExceptionMessage"));
+        if (rootMessage != null) {
+            parts.add("原因=" + rootMessage);
+        }
+        return parts.isEmpty() ? null : String.join(" | ", parts);
+    }
+
     private String reasonSummary(String auditReasonJson) {
         Map<String, Object> auditReason = structuredMap(auditReasonJson);
         Object summary = auditReason.get("reasonSummary");
@@ -830,6 +869,9 @@ public class ConsoleTranscriptPrinter {
     }
 
     private String selectionModeLabel(String mode) {
+        if ("SEAT_BINDING".equalsIgnoreCase(mode)) {
+            return "按座位绑定";
+        }
         if ("ROLE_BINDING".equalsIgnoreCase(mode)) {
             return "按身份绑定";
         }

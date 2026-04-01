@@ -133,6 +133,21 @@ exit
 
 如果环境变量不存在，console 会给出 warning；真正跑到该席位时，若 provider 调用失败或返回非法结构，游戏会切到 `PAUSED`，并且可以通过 `audit` 查看失败原因。
 
+共享的 OpenAI-compatible provider 路由当前覆盖 `openai|minimax|glm|claude|qwen`，它们现在共用同一套传输层行为：
+
+- 默认超时为 `30s`；`minimax|glm|claude|qwen` 默认提升到 `60s`
+- 如果显式设置 `providerOptions.timeoutMillis`，则以该值为准
+- 传输层会对 `429/500/502/503/504` 和 `timeout/connect/io` 做最多 3 次总尝试，退避为 `500ms`、`1500ms`
+- 传输失败不会再触发外层结构化纠错重试；最终仍会暂停游戏，而不是静默回退到 `noop`
+
+如果你要先做连通性排查，再正式开局，优先使用：
+
+```text
+probe-model glm-5 structured
+```
+
+`probe-model` 会复用同一套 timeout 规则，因此比单纯看启动 warning 更接近真实运行时表现。
+
 ## REST 使用方式
 
 ### 1. 创建游戏
@@ -266,7 +281,14 @@ POST /games/{gameId}/players/{playerId}/actions
 - `project`
 - `timeoutMillis`
 
-如果没有显式提供 `apiKey` 或 `apiKeyEnv`，网关还会尝试读取 `OPENAI_API_KEY`。
+对于仓库内静态 catalog profiles（`avalon-app/src/main/resources/model-profiles/`），不要再把 `apiKey` 写进源码。优先在仓库根目录放一个被 `.gitignore` 忽略的 `avalon-model-profile-secrets.yml`。仓库里的 `avalon-model-profile-secrets.example.yml` 只是模板，真实运行时必须存在根目录 `avalon-model-profile-secrets.yml`：
+
+```yaml
+modelProfileApiKeys:
+  gpt-5.4: sk-...
+```
+
+如果这个文件不存在，也可以通过启动参数 `--avalon.model-profile-api-keys.gpt-5.4=...`、环境变量 `AVALON_MODEL_PROFILE_API_KEY_GPT_5_4=...`，或兼容性的 `OPENAI_API_KEY` 提供 key。
 
 ## 常见观察面
 
@@ -320,6 +342,15 @@ POST /games/{gameId}/players/{playerId}/actions
 - 查看非法输出的失败上下文
 - 定位为什么进入 `PAUSED`
 
+如果是 OpenAI-compatible provider 的联网失败，`audit`、console inline thought 和局后报告会额外带出传输诊断摘要，重点看这些字段：
+
+- `failureKind`
+- `transportAttempts`
+- `timeoutMs`
+- `statusCode`
+- `rootExceptionClass`
+- `rootExceptionMessage`
+
 ## 当前限制
 
 - 当前仓库最可靠的自动化路径仍然是 `SCRIPTED` 和 `LLM(noop fallback)`。
@@ -334,7 +365,8 @@ POST /games/{gameId}/players/{playerId}/actions
 1. 先跑 `mvn -q test`
 2. 再用 console 模式跑一局 `scripted`
 3. 然后试一局 `noop` LLM
-4. 最后在有真实密钥时再试 `openai` 或其他 OpenAI-compatible provider
+4. 在有真实密钥时，先跑一次 `probe-model <modelId> structured`
+5. 最后再试 `openai`、`glm` 或其他 OpenAI-compatible provider 真局
 
 这样能最快区分：
 

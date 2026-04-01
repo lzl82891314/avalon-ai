@@ -22,32 +22,40 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class YamlConfigLoaderTest {
     @Test
-    void loadsClassicFivePlayerConfigsFromApplicationResources() {
+    void loadsClassicFiveToTenPlayerConfigsFromApplicationResources() {
         Path resourceRoot = Path.of("..", "avalon-app", "src", "main", "resources").normalize();
         AvalonConfigRegistry registry = new YamlConfigLoader(new SetupValidationService()).load(resourceRoot);
         var modelProfile = registry.modelProfiles().stream().findFirst().orElseThrow();
 
-        assertEquals(1, registry.ruleSets().size());
-        assertEquals(5, registry.roles().size());
-        assertEquals(1, registry.setupTemplates().size());
+        assertTrue(registry.ruleSets().size() >= 7);
+        assertTrue(registry.roles().size() >= 7);
+        assertTrue(registry.setupTemplates().size() >= 7);
         assertEquals(5, registry.modelProfiles().size());
         assertTrue(registry.findRuleSet("avalon-classic-5p-v1").isPresent());
+        assertTrue(registry.findRuleSet("avalon-classic-10p-v2").isPresent());
         assertTrue(registry.findRole("MERLIN").isPresent());
+        assertTrue(registry.findRole("MORDRED").isPresent());
+        assertTrue(registry.findRole("OBERON").isPresent());
         assertTrue(registry.findSetupTemplate("classic-5p-v1").isPresent());
+        assertTrue(registry.findSetupTemplate("classic-10p-v2").isPresent());
         assertTrue(registry.findModelProfile(modelProfile.modelId()).isPresent());
-        assertTrue(registry.findModelProfile("claude-compatible-template").isPresent());
+        assertTrue(registry.findModelProfile("claude-sonnet-4-6").isPresent());
 
-        RuleSetDefinition ruleSet = registry.requireRuleSet("avalon-classic-5p-v1");
+        RuleSetDefinition ruleSet = registry.requireRuleSet("avalon-classic-10p-v2");
         RoleDefinition merlin = registry.requireRole("MERLIN");
         RoleDefinition percival = registry.requireRole("PERCIVAL");
         RoleDefinition morgana = registry.requireRole("MORGANA");
-        SetupTemplate template = registry.requireSetupTemplate("classic-5p-v1");
+        SetupTemplate template = registry.requireSetupTemplate("classic-10p-v2");
         var loadedModelProfile = registry.requireModelProfile(modelProfile.modelId());
 
-        assertEquals("avalon-classic-5p-v1", ruleSet.ruleSetId());
+        assertEquals("avalon-classic-10p-v2", ruleSet.ruleSetId());
         assertEquals("MERLIN", merlin.roleId());
-        assertEquals("classic-5p-v1", template.templateId());
+        assertEquals("classic-10p-v2", template.templateId());
+        assertEquals(10, template.playerCount());
+        assertEquals(4, template.roleIds().stream().filter("LOYAL_SERVANT"::equals).count());
+        assertEquals(2, ruleSet.failThresholdForRound(4));
         assertEquals(modelProfile.modelId(), loadedModelProfile.modelId());
+        assertTrue(loadedModelProfile.providerOptions().containsKey("apiKey") == false);
         assertEquals(KnowledgeRuleType.SEE_ROLE_AMBIGUITY, percival.knowledgeRules().get(0).type());
         assertEquals(KnowledgeRuleType.SEE_ALLIED_EVIL_PLAYERS, morgana.knowledgeRules().get(0).type());
     }

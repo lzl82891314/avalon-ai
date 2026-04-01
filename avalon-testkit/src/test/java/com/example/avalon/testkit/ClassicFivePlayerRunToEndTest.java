@@ -19,4 +19,26 @@ class ClassicFivePlayerRunToEndTest {
         assertFalse(result.events().isEmpty(), "events should be recorded");
         assertTrue(result.state().events().stream().anyMatch(event -> event.type().equals("GAME_ENDED")));
     }
+
+    @Test
+    void scriptedClassicSevenPlayerGameRunsToEnd() {
+        GameRunResult result = ScriptedAvalonFixture.orchestrator()
+                .runToEnd(ScriptedAvalonFixture.classicSetup(7, 22334455L));
+
+        assertTrue(result.state().status() == GameStatus.ENDED, "game should end");
+        assertNotNull(result.state().winnerCamp(), "winner should be decided");
+        assertFalse(result.events().isEmpty(), "events should be recorded");
+        assertTrue(result.state().events().stream().anyMatch(event -> event.type().equals("GAME_ENDED")));
+    }
+
+    @Test
+    void scriptedClassicTenPlayerGameRunsToEnd() {
+        GameRunResult result = ScriptedAvalonFixture.orchestrator()
+                .runToEnd(ScriptedAvalonFixture.classicSetup(10, 99887766L));
+
+        assertTrue(result.state().status() == GameStatus.ENDED, "game should end");
+        assertNotNull(result.state().winnerCamp(), "winner should be decided");
+        assertFalse(result.events().isEmpty(), "events should be recorded");
+        assertTrue(result.state().events().stream().anyMatch(event -> event.type().equals("GAME_ENDED")));
+    }
 }

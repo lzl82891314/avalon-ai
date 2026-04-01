@@ -58,9 +58,6 @@ public final class SetupValidationService {
         if (template.roleIds().size() != template.playerCount()) {
             throw new ConfigValidationException("Template " + template.templateId() + " role count must equal player count");
         }
-        if (new HashSet<>(template.roleIds()).size() != template.roleIds().size()) {
-            throw new ConfigValidationException("Template " + template.templateId() + " contains duplicate role ids");
-        }
         for (String roleId : template.roleIds()) {
             if (!roles.containsKey(roleId)) {
                 throw new ConfigValidationException("Template " + template.templateId() + " references missing role " + roleId);
@@ -146,6 +143,12 @@ public final class SetupValidationService {
     }
 
     private void validateModelProfileProviderOptions(LlmModelDefinition modelProfile) {
+        String apiKey = stringOption(modelProfile.providerOptions(), "apiKey");
+        if (apiKey != null && !apiKey.isBlank()) {
+            throw new ConfigValidationException(
+                    "Model profile " + modelProfile.modelId() + " must not define providerOptions.apiKey in source-controlled config"
+            );
+        }
         String baseUrl = stringOption(modelProfile.providerOptions(), "baseUrl");
         if (baseUrl == null || baseUrl.isBlank()) {
             return;

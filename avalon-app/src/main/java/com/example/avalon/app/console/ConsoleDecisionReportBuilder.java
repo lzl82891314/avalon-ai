@@ -342,6 +342,10 @@ public class ConsoleDecisionReportBuilder {
                 parts.add(builder.toString());
             }
         }
+        String transportSummary = transportFailureSummary(auditEntry);
+        if (transportSummary != null) {
+            parts.add("传输诊断: " + transportSummary);
+        }
         if (includeErrorMessage) {
             String error = normalizeText(stringValue(validation.get("errorMessage")));
             if (error == null) {
@@ -355,6 +359,40 @@ public class ConsoleDecisionReportBuilder {
             return null;
         }
         return String.join("；", parts);
+    }
+
+    private String transportFailureSummary(GameAuditEntryResponse auditEntry) {
+        Map<String, Object> rawModelResponse = structuredMap(auditEntry == null ? null : auditEntry.getRawModelResponseJson());
+        String failureDomain = stringValue(rawModelResponse.get("failureDomain"));
+        if (!"transport".equalsIgnoreCase(failureDomain)) {
+            return null;
+        }
+        List<String> parts = new ArrayList<>();
+        String failureKind = stringValue(rawModelResponse.get("failureKind"));
+        if (failureKind != null) {
+            parts.add("类型=" + failureKind);
+        }
+        Object attempts = rawModelResponse.get("transportAttempts");
+        if (attempts != null) {
+            parts.add("尝试=" + attempts);
+        }
+        Object timeoutMs = rawModelResponse.get("timeoutMs");
+        if (timeoutMs != null) {
+            parts.add("超时=" + timeoutMs + "ms");
+        }
+        Object statusCode = rawModelResponse.get("statusCode");
+        if (statusCode != null) {
+            parts.add("状态=" + statusCode);
+        }
+        String rootClass = normalizeText(stringValue(rawModelResponse.get("rootExceptionClass")));
+        if (rootClass != null) {
+            parts.add("异常=" + rootClass);
+        }
+        String rootMessage = normalizeText(stringValue(rawModelResponse.get("rootExceptionMessage")));
+        if (rootMessage != null) {
+            parts.add("原因=" + rootMessage);
+        }
+        return parts.isEmpty() ? null : String.join(" | ", parts);
     }
 
     private String inputPrivateKnowledgeSummary(GameAuditEntryResponse auditEntry) {

@@ -50,11 +50,7 @@ public class DefaultSetupValidationService implements SetupValidationService {
         }
 
         Map<String, RoleDefinition> roleMap = roleDefinitions.stream().collect(java.util.stream.Collectors.toMap(RoleDefinition::roleId, role -> role));
-        Set<String> uniqueRoleIds = new HashSet<>();
         for (String roleId : setupTemplate.roleIds()) {
-            if (!uniqueRoleIds.add(roleId)) {
-                throw new GameConfigurationException("duplicate roleId in setup template: " + roleId);
-            }
             if (!roleMap.containsKey(roleId)) {
                 throw new GameConfigurationException("missing role definition for roleId: " + roleId);
             }
@@ -68,4 +64,3 @@ public class DefaultSetupValidationService implements SetupValidationService {
         }
     }
 }
-

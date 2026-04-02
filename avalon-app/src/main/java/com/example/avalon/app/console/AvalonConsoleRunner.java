@@ -502,11 +502,20 @@ public class AvalonConsoleRunner implements ApplicationRunner {
     }
 
     private List<String> defaultBindingModelIds(List<ModelProfileResponse> profiles, int requiredCount) {
+        String defaultModelId = preferredDefaultModelId(profiles);
         List<String> defaultModelIds = new ArrayList<>();
         for (int index = 0; index < requiredCount; index++) {
-            defaultModelIds.add(profiles.get(index % profiles.size()).getModelId());
+            defaultModelIds.add(defaultModelId);
         }
         return defaultModelIds;
+    }
+
+    private String preferredDefaultModelId(List<ModelProfileResponse> profiles) {
+        return profiles.stream()
+                .filter(profile -> "openai".equalsIgnoreCase(profile.getProvider()))
+                .map(ModelProfileResponse::getModelId)
+                .findFirst()
+                .orElseGet(() -> profiles.getFirst().getModelId());
     }
 
     private void printDefaultSeatBindings(List<Integer> seatNos, List<String> defaultModelIds) {

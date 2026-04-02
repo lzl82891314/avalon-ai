@@ -35,18 +35,91 @@ public class NoopAgentGateway implements ModelGateway, StructuredModelGateway {
 
     @Override
     public StructuredInferenceResult infer(StructuredInferenceRequest request) {
-        JsonNode payload = objectMapper.valueToTree(Map.of(
-                "beliefsByPlayerId", Map.of(),
-                "strategyMode", "SAFE_DEFAULT",
-                "lastSummary", "noop structured inference",
-                "observationsToAdd", List.of("noop structured inference"),
-                "inferredFactsToAdd", List.of()
-        ));
+        String stageId = structuredStageId(request);
+        JsonNode payload = objectMapper.valueToTree(structuredPayload(stageId));
         StructuredInferenceResult result = new StructuredInferenceResult();
         result.setPayload(payload);
         result.setRawJson(payload.toString());
-        result.setModelMetadata(buildStructuredMetadata(request));
+        result.setModelMetadata(buildStructuredMetadata(request, stageId));
         return result;
+    }
+
+    private Map<String, Object> structuredPayload(String stageId) {
+        if ("tot-stage".equals(stageId)) {
+            Map<String, Object> candidate1 = new LinkedHashMap<>();
+            candidate1.put("candidateId", "C1");
+            candidate1.put("actionDraft", Map.of("mode", "stabilize"));
+            candidate1.put("actionPlanSummary", "Prefer the lowest-risk legal action.");
+            candidate1.put("projectedPublicReaction", "Most players see it as cautious.");
+            candidate1.put("projectedVoteOutcome", "Likely to avoid immediate conflict.");
+            candidate1.put("projectedMissionRisk", "Low short-term exposure.");
+            candidate1.put("expectedUtility", 0.62);
+            candidate1.put("keyRisks", List.of("May reveal too little new information."));
+
+            Map<String, Object> candidate2 = new LinkedHashMap<>();
+            candidate2.put("candidateId", "C2");
+            candidate2.put("actionDraft", Map.of("mode", "pressure-test"));
+            candidate2.put("actionPlanSummary", "Probe one suspicious player while preserving flexibility.");
+            candidate2.put("projectedPublicReaction", "Creates debate but remains defensible.");
+            candidate2.put("projectedVoteOutcome", "Mixed support from the table.");
+            candidate2.put("projectedMissionRisk", "Medium information gain and medium exposure.");
+            candidate2.put("expectedUtility", 0.78);
+            candidate2.put("keyRisks", List.of("Can trigger counter-pressure."));
+
+            Map<String, Object> candidate3 = new LinkedHashMap<>();
+            candidate3.put("candidateId", "C3");
+            candidate3.put("actionDraft", Map.of("mode", "aggressive"));
+            candidate3.put("actionPlanSummary", "Force a sharper stance to test alignments.");
+            candidate3.put("projectedPublicReaction", "High table friction.");
+            candidate3.put("projectedVoteOutcome", "Higher rejection probability.");
+            candidate3.put("projectedMissionRisk", "High exposure if read incorrectly.");
+            candidate3.put("expectedUtility", 0.44);
+            candidate3.put("keyRisks", List.of("Can expose hidden role intentions."));
+
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("candidates", List.of(candidate1, candidate2, candidate3));
+            payload.put("selectedCandidateId", "C2");
+            payload.put("summary", "Candidate C2 balances pressure and concealment best.");
+            return payload;
+        }
+        if ("critic-stage".equals(stageId)) {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("status", "MIXED");
+            payload.put("riskFindings", List.of(
+                    "Selected candidate may create a readable pattern of suspicion.",
+                    "Overcommitting too early can leak hidden role incentives."
+            ));
+            payload.put("counterSignals", List.of(
+                    "The line is still explainable from a cautious good-player view."
+            ));
+            payload.put("recommendedAdjustments", List.of(
+                    "Keep public speech short and avoid naming certainty.",
+                    "Preserve flexibility in later rounds."
+            ));
+            payload.put("summary", "Challenge the line slightly, but it remains salvageable.");
+            return payload;
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("beliefsByPlayerId", Map.of());
+        payload.put("strategyMode", "SAFE_DEFAULT");
+        payload.put("lastSummary", "noop structured inference");
+        payload.put("observationsToAdd", List.of("noop structured inference"));
+        payload.put("inferredFactsToAdd", List.of());
+        return payload;
+    }
+
+    private String structuredStageId(StructuredInferenceRequest request) {
+        String combinedPrompt = (request.getDeveloperPrompt() == null ? "" : request.getDeveloperPrompt())
+                + "\n"
+                + (request.getUserPrompt() == null ? "" : request.getUserPrompt());
+        String normalized = combinedPrompt.toLowerCase();
+        if (normalized.contains("stageid=critic-stage")) {
+            return "critic-stage";
+        }
+        if (normalized.contains("stageid=tot-stage")) {
+            return "tot-stage";
+        }
+        return "belief-stage";
     }
 
     private Map<String, Object> actionPayload(AgentTurnRequest request, String speech) {
@@ -187,7 +260,7 @@ public class NoopAgentGateway implements ModelGateway, StructuredModelGateway {
         return metadata;
     }
 
-    private RawCompletionMetadata buildStructuredMetadata(StructuredInferenceRequest request) {
+    private RawCompletionMetadata buildStructuredMetadata(StructuredInferenceRequest request, String stageId) {
         RawCompletionMetadata metadata = new RawCompletionMetadata();
         metadata.setProvider("noop");
         metadata.setModelName("deterministic-fallback");
@@ -195,7 +268,10 @@ public class NoopAgentGateway implements ModelGateway, StructuredModelGateway {
         long userTokens = request.getUserPrompt() == null ? 0L : request.getUserPrompt().length();
         metadata.setInputTokens(developerTokens + userTokens);
         metadata.setOutputTokens(24L);
-        metadata.setAttributes(Map.of("modelSlotId", request.getModelSlotId()));
+        Map<String, Object> attributes = new LinkedHashMap<>();
+        attributes.put("modelSlotId", request.getModelSlotId());
+        attributes.put("stageId", stageId);
+        metadata.setAttributes(attributes);
         return metadata;
     }
 

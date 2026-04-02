@@ -8,6 +8,7 @@ maxTokens: 320
 enabled: true
 providerOptions:
   baseUrl: https://gcapi.cn/v1
+  timeoutMillis: 120000
   instructionRole: system
   response_format:
     type: json_object

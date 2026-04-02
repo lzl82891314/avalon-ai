@@ -18,6 +18,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -314,6 +315,137 @@ class GameApiIntegrationTest {
         assertThat(auditEntries.get(0).path("executionTraceJson").asText()).contains("decision-stage");
         assertThat(auditEntries.get(0).path("policySummaryJson").asText()).contains("\"policyId\":\"tom-v1\"");
         assertThat(auditEntries.get(0).path("policySummaryJson").asText()).contains("\"stageCount\":2");
+    }
+
+    @Test
+    void stepShouldExecuteTomTotPolicyAndPersistThreeStageAuditTrace() throws Exception {
+        CreateGameRequest request = new CreateGameRequest();
+        request.setRuleSetId("avalon-classic-5p-v1");
+        request.setSetupTemplateId("classic-5p-v1");
+        request.setSeed(112L);
+        request.setPlayers(playersWithSinglePolicyLlmSeat(AgentPolicyIds.TOM_TOT_V1, "tom-tot-v1-baseline"));
+
+        String responseBody = mockMvc.perform(post("/games")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String gameId = objectMapper.readTree(responseBody).get("gameId").asText();
+
+        mockMvc.perform(post("/games/{gameId}/start", gameId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RUNNING"));
+
+        mockMvc.perform(post("/games/{gameId}/step", gameId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RUNNING"));
+
+        String auditResponseBody = mockMvc.perform(get("/games/{gameId}/audit", gameId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(org.hamcrest.Matchers.greaterThan(0)))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        JsonNode auditEntries = objectMapper.readTree(auditResponseBody);
+        assertThat(auditEntries.get(0).path("executionTraceJson").asText()).contains("belief-stage");
+        assertThat(auditEntries.get(0).path("executionTraceJson").asText()).contains("tot-stage");
+        assertThat(auditEntries.get(0).path("executionTraceJson").asText()).contains("decision-stage");
+        assertThat(auditEntries.get(0).path("policySummaryJson").asText()).contains("\"policyId\":\"tom-tot-v1\"");
+        assertThat(auditEntries.get(0).path("policySummaryJson").asText()).contains("\"stageCount\":3");
+    }
+
+    @Test
+    void stepShouldExecuteTomTotCriticPolicyAndPersistFourStageAuditTrace() throws Exception {
+        CreateGameRequest request = new CreateGameRequest();
+        request.setRuleSetId("avalon-classic-5p-v1");
+        request.setSetupTemplateId("classic-5p-v1");
+        request.setSeed(113L);
+        request.setPlayers(playersWithSingleTomTotCriticSeatAndExplicitCriticSlot());
+
+        String responseBody = mockMvc.perform(post("/games")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String gameId = objectMapper.readTree(responseBody).get("gameId").asText();
+
+        mockMvc.perform(post("/games/{gameId}/start", gameId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RUNNING"));
+
+        mockMvc.perform(post("/games/{gameId}/step", gameId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RUNNING"));
+
+        String auditResponseBody = mockMvc.perform(get("/games/{gameId}/audit", gameId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(org.hamcrest.Matchers.greaterThan(0)))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        JsonNode auditEntries = objectMapper.readTree(auditResponseBody);
+        assertThat(auditEntries.get(0).path("executionTraceJson").asText()).contains("belief-stage");
+        assertThat(auditEntries.get(0).path("executionTraceJson").asText()).contains("tot-stage");
+        assertThat(auditEntries.get(0).path("executionTraceJson").asText()).contains("critic-stage");
+        assertThat(auditEntries.get(0).path("executionTraceJson").asText()).contains("decision-stage");
+        assertThat(auditEntries.get(0).path("executionTraceJson").asText()).contains("\"modelSlotId\":\"critic\"");
+        assertThat(auditEntries.get(0).path("policySummaryJson").asText()).contains("\"policyId\":\"tom-tot-critic-v1\"");
+        assertThat(auditEntries.get(0).path("policySummaryJson").asText()).contains("\"stageCount\":4");
+    }
+
+    @Test
+    void stepShouldFallbackCriticStageToActorSlotWhenCriticSlotMissing() throws Exception {
+        CreateGameRequest request = new CreateGameRequest();
+        request.setRuleSetId("avalon-classic-5p-v1");
+        request.setSetupTemplateId("classic-5p-v1");
+        request.setSeed(114L);
+        request.setPlayers(playersWithSinglePolicyLlmSeat(AgentPolicyIds.TOM_TOT_CRITIC_V1, "tom-tot-critic-v1-baseline"));
+
+        String responseBody = mockMvc.perform(post("/games")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String gameId = objectMapper.readTree(responseBody).get("gameId").asText();
+
+        mockMvc.perform(post("/games/{gameId}/start", gameId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RUNNING"));
+
+        mockMvc.perform(post("/games/{gameId}/step", gameId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RUNNING"));
+
+        String auditResponseBody = mockMvc.perform(get("/games/{gameId}/audit", gameId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(org.hamcrest.Matchers.greaterThan(0)))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        JsonNode auditEntries = objectMapper.readTree(auditResponseBody);
+        JsonNode executionTrace = objectMapper.readTree(auditEntries.get(0).path("executionTraceJson").asText());
+        JsonNode criticStage = null;
+        for (JsonNode stage : executionTrace) {
+            if ("critic-stage".equals(stage.path("stageId").asText())) {
+                criticStage = stage;
+                break;
+            }
+        }
+        assertThat(criticStage).isNotNull();
+        assertThat(criticStage.path("modelSlotId").asText()).isEqualTo("actor");
+
+        JsonNode policySummary = objectMapper.readTree(auditEntries.get(0).path("policySummaryJson").asText());
+        assertThat(policySummary.path("modelSlotIds").size()).isEqualTo(1);
+        assertThat(policySummary.path("modelSlotIds").get(0).asText()).isEqualTo("actor");
     }
 
     @Test
@@ -630,13 +762,43 @@ class GameApiIntegrationTest {
     }
 
     private List<CreateGameRequest.PlayerSlotRequest> playersWithSingleTomLlmSeat() {
+        return playersWithSinglePolicyLlmSeat(AgentPolicyIds.TOM_V1, "tom-v1-baseline");
+    }
+
+    private List<CreateGameRequest.PlayerSlotRequest> playersWithSinglePolicyLlmSeat(String policyId, String strategyProfileId) {
         List<CreateGameRequest.PlayerSlotRequest> players = players();
         players.get(0).setControllerType("LLM");
         com.example.avalon.agent.model.PlayerAgentConfig agentConfig = new com.example.avalon.agent.model.PlayerAgentConfig();
-        agentConfig.setAgentPolicyId(AgentPolicyIds.TOM_V1);
-        agentConfig.setStrategyProfileId("tom-v1-baseline");
+        agentConfig.setAgentPolicyId(policyId);
+        agentConfig.setStrategyProfileId(strategyProfileId);
         players.get(0).setAgentConfig(agentConfig);
         return players;
+    }
+
+    private List<CreateGameRequest.PlayerSlotRequest> playersWithSingleTomTotCriticSeatAndExplicitCriticSlot() {
+        List<CreateGameRequest.PlayerSlotRequest> players = playersWithSinglePolicyLlmSeat(
+                AgentPolicyIds.TOM_TOT_CRITIC_V1,
+                "tom-tot-critic-v1-baseline"
+        );
+        com.example.avalon.agent.model.PlayerAgentConfig agentConfig = players.get(0).getAgentConfig();
+        com.example.avalon.agent.model.ModelProfile actor = noopProfile("noop-actor-slot");
+        com.example.avalon.agent.model.ModelProfile critic = noopProfile("noop-critic-slot");
+        agentConfig.setModelProfile(actor);
+        agentConfig.setModelSlots(Map.of(
+                "actor", actor,
+                "critic", critic
+        ));
+        return players;
+    }
+
+    private com.example.avalon.agent.model.ModelProfile noopProfile(String modelId) {
+        com.example.avalon.agent.model.ModelProfile profile = new com.example.avalon.agent.model.ModelProfile();
+        profile.setModelId(modelId);
+        profile.setProvider("noop");
+        profile.setModelName("deterministic-fallback");
+        profile.setTemperature(0.0);
+        profile.setMaxTokens(32);
+        return profile;
     }
 
     private List<CreateGameRequest.PlayerSlotRequest> playersWithAllLlmSeats(int playerCount) {

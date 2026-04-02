@@ -85,4 +85,18 @@ public class StructuredInferenceRequest {
     public void setUserPrompt(String userPrompt) {
         this.userPrompt = userPrompt;
     }
+
+    public StructuredInferenceRequest copy() {
+        StructuredInferenceRequest copy = new StructuredInferenceRequest();
+        copy.setModelSlotId(modelSlotId);
+        copy.setModelId(modelId);
+        copy.setProvider(provider);
+        copy.setModelName(modelName);
+        copy.setTemperature(temperature);
+        copy.setMaxTokens(maxTokens);
+        copy.setProviderOptions(providerOptions);
+        copy.setDeveloperPrompt(developerPrompt);
+        copy.setUserPrompt(userPrompt);
+        return copy;
+    }
 }

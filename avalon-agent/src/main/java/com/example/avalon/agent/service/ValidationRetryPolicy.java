@@ -15,7 +15,6 @@ import java.util.Locale;
 public class ValidationRetryPolicy {
     private static final int DEFAULT_MAX_ATTEMPTS = 2;
     private static final int MIN_CORRECTIVE_MAX_TOKENS = 320;
-    private static final int CORRECTIVE_TOKEN_INCREMENT = 320;
 
     private final PrivateKnowledgeExpressionValidator privateKnowledgeExpressionValidator;
 
@@ -82,19 +81,14 @@ public class ValidationRetryPolicy {
         if (!(failure instanceof OpenAiCompatibleResponseException responseException)) {
             return true;
         }
-        String failureDomain = stringValue(responseException.diagnostics().get("failureDomain"));
-        if ("transport".equalsIgnoreCase(failureDomain)) {
+        if (ResponseRetrySupport.isTransportFailure(responseException)) {
             return false;
         }
-        String finishReason = stringValue(responseException.diagnostics().get("finishReason"));
-        String contentShape = stringValue(responseException.diagnostics().get("assistantContentShape"));
-        String message = failure.getMessage() == null ? "" : failure.getMessage();
-        return requiresCompressionRetry(finishReason, contentShape, message);
+        return ResponseRetrySupport.requiresCompressionRetry(responseException);
     }
 
     private int raisedMaxTokens(Integer currentMaxTokens) {
-        int current = currentMaxTokens == null ? 0 : currentMaxTokens;
-        return Math.max(current, MIN_CORRECTIVE_MAX_TOKENS) + CORRECTIVE_TOKEN_INCREMENT;
+        return ResponseRetrySupport.raisedMaxTokens(currentMaxTokens, MIN_CORRECTIVE_MAX_TOKENS);
     }
 
     private String appendPrompt(String originalPrompt, String correctivePrompt) {
@@ -124,7 +118,7 @@ public class ValidationRetryPolicy {
         String finishReason = stringValue(responseException.diagnostics().get("finishReason"));
         String contentShape = stringValue(responseException.diagnostics().get("assistantContentShape"));
         String message = failure.getMessage() == null ? "" : failure.getMessage();
-        if (requiresCompressionRetry(finishReason, contentShape, message)) {
+        if (ResponseRetrySupport.requiresCompressionRetry(finishReason, contentShape, message)) {
             return """
                     上一轮输出没有满足结构化要求。请重新生成最小合法 JSON，并优先先写 action：
                     - 最终回复只能是一个 JSON 对象，首字符必须是 {，尾字符必须是 }
@@ -137,23 +131,6 @@ public class ValidationRetryPolicy {
                     """.formatted(actionRequirement(allowedActions)).strip();
         }
         return null;
-    }
-
-    private boolean requiresCompressionRetry(String finishReason, String contentShape, String message) {
-        if ("length".equalsIgnoreCase(finishReason)) {
-            return true;
-        }
-        if (contentShape == null || contentShape.isBlank()) {
-            return message.contains("did not include an action object");
-        }
-        return switch (contentShape) {
-            case "truncated_json_candidate",
-                 "plain_text",
-                 "markdown_explanation",
-                 "reasoning_only",
-                 "missing_content" -> true;
-            default -> message.contains("did not include an action object");
-        };
     }
 
     private String actionRequirement(List<String> allowedActions) {
@@ -169,10 +146,6 @@ public class ValidationRetryPolicy {
     }
 
     private String stringValue(Object value) {
-        if (value == null) {
-            return null;
-        }
-        String string = String.valueOf(value);
-        return string.isBlank() ? null : string;
+        return ResponseRetrySupport.stringValue(value);
     }
 }

@@ -91,10 +91,11 @@ class AvalonConsoleRunnerTest {
     }
 
     @Test
-    void promptSeatBindingSelectionShouldCycleProfilesWhenEnabledCountIsBelowSeatCount() {
+    void promptSeatBindingSelectionShouldPreferOpenAiProfileForAllDefaults() {
         AvalonConsoleRunner runner = runnerWithProfiles(List.of(
-                profile("model-a"),
-                profile("model-b")
+                profile("glm-5", "glm"),
+                profile("openai-gpt-5.4", "openai"),
+                profile("minimax-m2.7", "minimax")
         ));
 
         CreateGameRequest.LlmSelectionRequest request = ReflectionTestUtils.invokeMethod(
@@ -106,20 +107,46 @@ class AvalonConsoleRunnerTest {
 
         assertThat(request.getSeatBindings())
                 .containsExactlyEntriesOf(orderedSeatBindings(
-                        1, "model-a",
-                        2, "model-b",
-                        3, "model-a",
-                        4, "model-b",
-                        5, "model-a",
-                        6, "model-b"
+                        1, "openai-gpt-5.4",
+                        2, "openai-gpt-5.4",
+                        3, "openai-gpt-5.4",
+                        4, "openai-gpt-5.4",
+                        5, "openai-gpt-5.4",
+                        6, "openai-gpt-5.4"
                 ));
     }
 
     @Test
-    void promptRoleBindingSelectionShouldCycleProfilesWhenEnabledCountIsBelowRoleCount() {
+    void promptRoleBindingSelectionShouldPreferOpenAiProfileForAllDefaults() {
         AvalonConsoleRunner runner = runnerWithProfiles(List.of(
-                profile("model-a"),
-                profile("model-b")
+                profile("glm-5", "glm"),
+                profile("openai-gpt-5.4", "openai"),
+                profile("minimax-m2.7", "minimax")
+        ));
+
+        CreateGameRequest.LlmSelectionRequest request = ReflectionTestUtils.invokeMethod(
+                runner,
+                "promptRoleBindingSelection",
+                reader(blankLines(5)),
+                CLASSIC_TEMPLATE
+        );
+
+        assertThat(request.getRoleBindings())
+                .containsExactlyEntriesOf(orderedBindings(
+                        "MERLIN", "openai-gpt-5.4",
+                        "PERCIVAL", "openai-gpt-5.4",
+                        "LOYAL_SERVANT", "openai-gpt-5.4",
+                        "MORGANA", "openai-gpt-5.4",
+                        "ASSASSIN", "openai-gpt-5.4"
+                ));
+    }
+
+    @Test
+    void promptRoleBindingSelectionShouldFallbackToFirstProfileWhenOpenAiIsUnavailable() {
+        AvalonConsoleRunner runner = runnerWithProfiles(List.of(
+                profile("model-a", "glm"),
+                profile("model-b", "minimax"),
+                profile("model-c", "claude")
         ));
 
         CreateGameRequest.LlmSelectionRequest request = ReflectionTestUtils.invokeMethod(
@@ -132,38 +159,10 @@ class AvalonConsoleRunnerTest {
         assertThat(request.getRoleBindings())
                 .containsExactlyEntriesOf(orderedBindings(
                         "MERLIN", "model-a",
-                        "PERCIVAL", "model-b",
+                        "PERCIVAL", "model-a",
                         "LOYAL_SERVANT", "model-a",
-                        "MORGANA", "model-b",
+                        "MORGANA", "model-a",
                         "ASSASSIN", "model-a"
-                ));
-    }
-
-    @Test
-    void promptRoleBindingSelectionShouldUseFirstFiveEnabledProfilesWhenMoreThanFiveExist() {
-        AvalonConsoleRunner runner = runnerWithProfiles(List.of(
-                profile("model-a"),
-                profile("model-b"),
-                profile("model-c"),
-                profile("model-d"),
-                profile("model-e"),
-                profile("model-f")
-        ));
-
-        CreateGameRequest.LlmSelectionRequest request = ReflectionTestUtils.invokeMethod(
-                runner,
-                "promptRoleBindingSelection",
-                reader(blankLines(5)),
-                CLASSIC_TEMPLATE
-        );
-
-        assertThat(request.getRoleBindings())
-                .containsExactlyEntriesOf(orderedBindings(
-                        "MERLIN", "model-a",
-                        "PERCIVAL", "model-b",
-                        "LOYAL_SERVANT", "model-c",
-                        "MORGANA", "model-d",
-                        "ASSASSIN", "model-e"
                 ));
     }
 
@@ -187,10 +186,10 @@ class AvalonConsoleRunnerTest {
         assertThat(request.getRoleBindings())
                 .containsExactlyEntriesOf(orderedBindings(
                         "MERLIN", "model-a",
-                        "PERCIVAL", "model-b",
-                        "LOYAL_SERVANT", "model-c",
-                        "MORGANA", "model-d",
-                        "ASSASSIN", "model-e"
+                        "PERCIVAL", "model-a",
+                        "LOYAL_SERVANT", "model-a",
+                        "MORGANA", "model-a",
+                        "ASSASSIN", "model-a"
                 ));
     }
 
@@ -419,12 +418,16 @@ class AvalonConsoleRunnerTest {
     }
 
     private ModelProfileResponse profile(String modelId) {
+        return profile(modelId, "openai");
+    }
+
+    private ModelProfileResponse profile(String modelId, String provider) {
         ModelProfileResponse response = new ModelProfileResponse();
         response.setModelId(modelId);
         response.setDisplayName(modelId);
         response.setSource("STATIC");
         response.setEnabled(true);
-        response.setProvider("openai");
+        response.setProvider(provider);
         response.setModelName(modelId);
         return response;
     }

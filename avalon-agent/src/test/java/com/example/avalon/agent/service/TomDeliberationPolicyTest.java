@@ -38,6 +38,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -84,7 +85,8 @@ class TomDeliberationPolicyTest {
                 new AgentTurnRequestFactory(),
                 new TomPromptFactory(new PromptBuilder()),
                 new ResponseParser(),
-                new ValidationRetryPolicy()
+                new ValidationRetryPolicy(),
+                new StructuredStageRetryPolicy()
         );
 
         TurnAgentResult result = policy.execute(teamVoteContext(), config());
@@ -124,7 +126,8 @@ class TomDeliberationPolicyTest {
                 new AgentTurnRequestFactory(),
                 new TomPromptFactory(new PromptBuilder()),
                 new ResponseParser(),
-                new ValidationRetryPolicy()
+                new ValidationRetryPolicy(),
+                new StructuredStageRetryPolicy()
         );
 
         AgentTurnExecutionException error = assertThrows(
@@ -169,7 +172,8 @@ class TomDeliberationPolicyTest {
                 new AgentTurnRequestFactory(),
                 new TomPromptFactory(new PromptBuilder()),
                 new ResponseParser(),
-                new ValidationRetryPolicy()
+                new ValidationRetryPolicy(),
+                new StructuredStageRetryPolicy()
         );
 
         AgentTurnExecutionException error = assertThrows(
@@ -186,6 +190,104 @@ class TomDeliberationPolicyTest {
         assertEquals("decision-stage", error.policySummary().get("failedStage"));
         assertEquals(1, error.policySummary().get("beliefCount"));
         assertEquals(3, error.policySummary().get("modelCalls"));
+    }
+
+    @Test
+    void shouldRetryBeliefStageCompressionFailuresAndReflectActualAttempts() {
+        AtomicInteger beliefAttempts = new AtomicInteger();
+        StructuredModelGateway structuredModelGateway = request -> {
+            if (beliefAttempts.incrementAndGet() == 1) {
+                throw new TomPolicyTestSupport().truncatedJsonFailure("openai", "gpt-5.4");
+            }
+            StructuredInferenceResult result = new StructuredInferenceResult();
+            result.setPayload(json("""
+                    {
+                      "beliefsByPlayerId":{
+                        "P2":{"firstOrderEvilScore":0.74,"secondOrderAwarenessScore":0.34,"thirdOrderManipulationRisk":0.49,"confidence":0.69}
+                      },
+                      "strategyMode":"SAFE_DEFAULT",
+                      "lastSummary":"先保持低承诺怀疑",
+                      "observationsToAdd":["P2 仍然值得继续观察"],
+                      "inferredFactsToAdd":[]
+                    }
+                    """));
+            result.setRawJson(result.getPayload().toString());
+            result.setModelMetadata(metadata("openai", "gpt-5.4", 40L, 22L));
+            return result;
+        };
+        ModelGateway modelGateway = request -> {
+            AgentTurnResult result = new AgentTurnResult();
+            result.setActionJson("{\"actionType\":\"TEAM_VOTE\",\"vote\":\"APPROVE\"}");
+            result.setAuditReason(new AuditReason());
+            result.setModelMetadata(metadata("openai", "gpt-5.4", 26L, 11L));
+            return result;
+        };
+        TomDeliberationPolicy policy = new TomDeliberationPolicy(
+                structuredModelGateway,
+                modelGateway,
+                new AgentTurnRequestFactory(),
+                new TomPromptFactory(new PromptBuilder()),
+                new ResponseParser(),
+                new ValidationRetryPolicy(),
+                new StructuredStageRetryPolicy()
+        );
+
+        TurnAgentResult result = policy.execute(teamVoteContext(), config());
+
+        assertEquals(3, result.attempts());
+        assertEquals(2, result.executionTrace().get(0).get("attempts"));
+        assertEquals(3, result.policySummary().get("modelCalls"));
+    }
+
+    @Test
+    void shouldTolerateIncompleteBeliefPayloadShapes() {
+        StructuredModelGateway structuredModelGateway = request -> {
+            StructuredInferenceResult result = new StructuredInferenceResult();
+            result.setPayload(json("""
+                    {
+                      "beliefsByPlayerId":{
+                        "P2":{"firstOrderEvilScore":"0.74","confidence":"0.69"},
+                        "P3":"suspicious",
+                        "P1":{"firstOrderEvilScore":0.99,"secondOrderAwarenessScore":0.99,"thirdOrderManipulationRisk":0.99,"confidence":0.99}
+                      },
+                      "strategyMode":true,
+                      "lastSummary":7,
+                      "observationsToAdd":"P2 kept hedging",
+                      "inferredFactsToAdd":[null,"P2 may be testing reactions"]
+                    }
+                    """));
+            result.setRawJson(result.getPayload().toString());
+            result.setModelMetadata(metadata("openai", "gpt-5.4", 28L, 13L));
+            return result;
+        };
+        ModelGateway modelGateway = request -> {
+            AgentTurnResult result = new AgentTurnResult();
+            result.setActionJson("{\"actionType\":\"TEAM_VOTE\",\"vote\":\"APPROVE\"}");
+            result.setAuditReason(new AuditReason());
+            result.setModelMetadata(metadata("openai", "gpt-5.4", 23L, 9L));
+            return result;
+        };
+        TomDeliberationPolicy policy = new TomDeliberationPolicy(
+                structuredModelGateway,
+                modelGateway,
+                new AgentTurnRequestFactory(),
+                new TomPromptFactory(new PromptBuilder()),
+                new ResponseParser(),
+                new ValidationRetryPolicy(),
+                new StructuredStageRetryPolicy()
+        );
+
+        TurnAgentResult result = policy.execute(teamVoteContext(), config());
+
+        assertEquals(1, result.turnResult().getMemoryUpdate().getBeliefsToUpsert().size());
+        assertEquals(0.74, result.turnResult().getMemoryUpdate().getBeliefsToUpsert().get("P2").firstOrderEvilScore());
+        assertEquals(0.5, result.turnResult().getMemoryUpdate().getBeliefsToUpsert().get("P2").secondOrderAwarenessScore());
+        assertEquals(0.5, result.turnResult().getMemoryUpdate().getBeliefsToUpsert().get("P2").thirdOrderManipulationRisk());
+        assertEquals(0.69, result.turnResult().getMemoryUpdate().getBeliefsToUpsert().get("P2").confidence());
+        assertEquals("true", result.turnResult().getMemoryUpdate().getStrategyMode());
+        assertEquals("7", result.turnResult().getMemoryUpdate().getLastSummary());
+        assertEquals(List.of("P2 kept hedging"), result.turnResult().getMemoryUpdate().getObservationsToAdd());
+        assertEquals(List.of("P2 may be testing reactions"), result.turnResult().getMemoryUpdate().getInferredFactsToAdd());
     }
 
     private PlayerAgentConfig config() {

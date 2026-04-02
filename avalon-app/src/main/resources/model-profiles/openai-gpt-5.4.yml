@@ -3,9 +3,10 @@ displayName: OpenAI GPT-5.4
 provider: openai
 modelName: gpt-5.4
 temperature: 0.2
-maxTokens: 180
+maxTokens: 1600
 enabled: true
 providerOptions:
   baseUrl: https://gcapi.cn/v1
+  timeoutMillis: 120000
   response_format:
     type: json_object

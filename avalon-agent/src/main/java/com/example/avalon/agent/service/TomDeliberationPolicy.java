@@ -8,24 +8,19 @@ import com.example.avalon.agent.model.AuditReason;
 import com.example.avalon.agent.model.MemoryUpdate;
 import com.example.avalon.agent.model.PlayerAgentConfig;
 import com.example.avalon.agent.model.RawCompletionMetadata;
-import com.example.avalon.agent.model.StructuredInferenceRequest;
 import com.example.avalon.agent.model.StructuredInferenceResult;
 import com.example.avalon.agent.model.TomBeliefStageResult;
 import com.example.avalon.agent.model.TurnAgentResult;
 import com.example.avalon.core.game.model.PlayerAction;
 import com.example.avalon.core.game.model.PlayerTurnContext;
 import com.example.avalon.core.player.memory.PlayerBeliefState;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 @Component
 public class TomDeliberationPolicy implements DeliberationPolicy {
@@ -35,20 +30,23 @@ public class TomDeliberationPolicy implements DeliberationPolicy {
     private final TomPromptFactory tomPromptFactory;
     private final ResponseParser responseParser;
     private final ValidationRetryPolicy validationRetryPolicy;
-    private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+    private final StructuredStageRetryPolicy structuredStageRetryPolicy;
+    private final TomPolicySupport support = new TomPolicySupport();
 
     public TomDeliberationPolicy(StructuredModelGateway structuredModelGateway,
                                  ModelGateway modelGateway,
                                  AgentTurnRequestFactory requestFactory,
                                  TomPromptFactory tomPromptFactory,
                                  ResponseParser responseParser,
-                                 ValidationRetryPolicy validationRetryPolicy) {
+                                 ValidationRetryPolicy validationRetryPolicy,
+                                 StructuredStageRetryPolicy structuredStageRetryPolicy) {
         this.structuredModelGateway = structuredModelGateway;
         this.modelGateway = modelGateway;
         this.requestFactory = requestFactory;
         this.tomPromptFactory = tomPromptFactory;
         this.responseParser = responseParser;
         this.validationRetryPolicy = validationRetryPolicy;
+        this.structuredStageRetryPolicy = structuredStageRetryPolicy;
     }
 
     @Override
@@ -62,33 +60,43 @@ public class TomDeliberationPolicy implements DeliberationPolicy {
 
         AgentTurnRequest beliefRequest = requestFactory.create(context, effectiveConfig, "actor");
         beliefRequest.setPromptText(tomPromptFactory.buildBeliefUserPrompt(beliefRequest));
-        StructuredInferenceRequest structuredRequest = structuredRequest(
+        var structuredRequest = support.structuredRequest(
                 beliefRequest,
                 tomPromptFactory.buildBeliefDeveloperPrompt(beliefRequest),
                 beliefRequest.getPromptText()
         );
 
+        StructuredStageRetryPolicy.StructuredStageExecution beliefExecution;
         StructuredInferenceResult structuredResult;
         TomBeliefStageResult beliefStageResult;
         Map<String, Object> beliefTrace;
+        int beliefAttempts = 0;
         try {
-            structuredResult = structuredModelGateway.infer(structuredRequest);
-            beliefStageResult = parseBeliefStage(context, structuredResult);
-            beliefTrace = beliefTrace(beliefRequest, structuredResult, beliefStageResult);
+            beliefExecution = structuredStageRetryPolicy.execute("belief-stage", structuredRequest, structuredModelGateway);
+            structuredResult = beliefExecution.result();
+            beliefAttempts = beliefExecution.attempts();
+            beliefStageResult = support.parseBeliefStage(context, structuredResult, policyId());
+            beliefTrace = beliefTrace(beliefRequest, structuredResult, beliefStageResult, beliefAttempts);
         } catch (RuntimeException exception) {
+            RuntimeException failure = exception instanceof StructuredStageRetryPolicy.StructuredStageExecutionException structuredException
+                    ? structuredException.failure()
+                    : exception;
+            int attempts = exception instanceof StructuredStageRetryPolicy.StructuredStageExecutionException structuredException
+                    ? structuredException.attempts()
+                    : Math.max(beliefAttempts, 1);
             throw new AgentTurnExecutionException(
                     "tom-v1 belief stage failed",
                     beliefRequest,
                     null,
-                    1,
-                    List.of(failedBeliefTrace(beliefRequest, exception)),
-                    failedPolicySummary(beliefRequest, 1, 0, "belief-stage", exception),
-                    exception
+                    attempts,
+                    List.of(failedBeliefTrace(beliefRequest, attempts, failure)),
+                    failedPolicySummary(beliefRequest, attempts, 0, "belief-stage", failure),
+                    failure
             );
         }
 
         AgentTurnRequest decisionRequest = requestFactory.create(context, effectiveConfig, "actor");
-        decisionRequest.setMemory(mergeBeliefIntoMemory(decisionRequest.getMemory(), beliefStageResult));
+        decisionRequest.setMemory(support.mergeBeliefIntoMemory(decisionRequest.getMemory(), beliefStageResult));
         decisionRequest.setPromptText(tomPromptFactory.buildDecisionPrompt(decisionRequest, beliefStageResult));
 
         try {
@@ -102,11 +110,18 @@ public class TomDeliberationPolicy implements DeliberationPolicy {
                     validated.request(),
                     enrichedTurnResult,
                     validated.action(),
-                    1 + validated.attempts(),
+                    beliefAttempts + validated.attempts(),
                     policyId(),
                     effectiveConfig.effectiveStrategyProfileId(),
                     executionTrace,
-                    successPolicySummary(validated.request(), structuredResult, enrichedTurnResult, beliefStageResult, validated.attempts())
+                    successPolicySummary(
+                            validated.request(),
+                            structuredResult,
+                            enrichedTurnResult,
+                            beliefStageResult,
+                            beliefAttempts,
+                            validated.attempts()
+                    )
             );
         } catch (AgentTurnExecutionException exception) {
             List<Map<String, Object>> executionTrace = List.of(
@@ -117,102 +132,18 @@ public class TomDeliberationPolicy implements DeliberationPolicy {
                     exception.getMessage(),
                     exception.request(),
                     exception.lastTurnResult(),
-                    1 + exception.attempts(),
+                    beliefAttempts + exception.attempts(),
                     executionTrace,
-                    failedPolicySummary(exception.request(), 1 + exception.attempts(), beliefStageResult.getBeliefsByPlayerId().size(), "decision-stage", exception.getCause()),
+                    failedPolicySummary(
+                            exception.request(),
+                            beliefAttempts + exception.attempts(),
+                            beliefStageResult.getBeliefsByPlayerId().size(),
+                            "decision-stage",
+                            exception.getCause()
+                    ),
                     exception.getCause()
             );
         }
-    }
-
-    private StructuredInferenceRequest structuredRequest(AgentTurnRequest request,
-                                                         String developerPrompt,
-                                                         String userPrompt) {
-        StructuredInferenceRequest structuredRequest = new StructuredInferenceRequest();
-        structuredRequest.setModelSlotId(request.getModelSlotId());
-        structuredRequest.setModelId(request.getModelId());
-        structuredRequest.setProvider(request.getProvider());
-        structuredRequest.setModelName(request.getModelName());
-        structuredRequest.setTemperature(request.getTemperature());
-        structuredRequest.setMaxTokens(request.getMaxTokens());
-        structuredRequest.setProviderOptions(request.getProviderOptions());
-        structuredRequest.setDeveloperPrompt(developerPrompt);
-        structuredRequest.setUserPrompt(userPrompt);
-        return structuredRequest;
-    }
-
-    private TomBeliefStageResult parseBeliefStage(PlayerTurnContext context, StructuredInferenceResult structuredResult) {
-        try {
-            TomBeliefStageResult beliefStageResult = objectMapper.treeToValue(structuredResult.getPayload(), TomBeliefStageResult.class);
-            sanitizeBeliefStage(context, beliefStageResult);
-            return beliefStageResult;
-        } catch (JsonProcessingException exception) {
-            throw new IllegalStateException("Failed to parse tom-v1 belief stage payload", exception);
-        }
-    }
-
-    private void sanitizeBeliefStage(PlayerTurnContext context, TomBeliefStageResult beliefStageResult) {
-        Set<String> validPlayerIds = validOtherPlayerIds(context);
-        Map<String, PlayerBeliefState> sanitizedBeliefs = new LinkedHashMap<>();
-        for (Map.Entry<String, PlayerBeliefState> entry : beliefStageResult.getBeliefsByPlayerId().entrySet()) {
-            if (entry.getKey() == null || entry.getValue() == null) {
-                continue;
-            }
-            String playerId = entry.getKey().trim();
-            if (!validPlayerIds.contains(playerId)) {
-                continue;
-            }
-            sanitizedBeliefs.put(playerId, entry.getValue());
-        }
-        beliefStageResult.setBeliefsByPlayerId(sanitizedBeliefs);
-        beliefStageResult.setStrategyMode(blankToNull(beliefStageResult.getStrategyMode()));
-        beliefStageResult.setLastSummary(blankToNull(beliefStageResult.getLastSummary()));
-    }
-
-    private Set<String> validOtherPlayerIds(PlayerTurnContext context) {
-        Set<String> playerIds = new LinkedHashSet<>();
-        context.publicState().players().forEach(player -> {
-            if (player.playerId() != null
-                    && !player.playerId().isBlank()
-                    && !player.playerId().equals(context.playerId())) {
-                playerIds.add(player.playerId());
-            }
-        });
-        return playerIds;
-    }
-
-    private Map<String, Object> mergeBeliefIntoMemory(Map<String, Object> memory, TomBeliefStageResult beliefStageResult) {
-        Map<String, Object> merged = new LinkedHashMap<>(memory == null ? Map.of() : memory);
-        merged.put("beliefsByPlayerId", beliefStageResult.getBeliefsByPlayerId());
-        if (beliefStageResult.getStrategyMode() != null) {
-            merged.put("strategyMode", beliefStageResult.getStrategyMode());
-        }
-        if (beliefStageResult.getLastSummary() != null) {
-            merged.put("lastSummary", beliefStageResult.getLastSummary());
-        }
-        mergeListField(merged, "observations", beliefStageResult.getObservationsToAdd());
-        mergeListField(merged, "inferredFacts", beliefStageResult.getInferredFactsToAdd());
-        return merged;
-    }
-
-    private void mergeListField(Map<String, Object> memory, String fieldName, List<String> additions) {
-        if (additions == null || additions.isEmpty()) {
-            return;
-        }
-        List<String> values = new ArrayList<>();
-        Object existing = memory.get(fieldName);
-        if (existing instanceof Collection<?> collection) {
-            for (Object item : collection) {
-                if (item != null) {
-                    String value = String.valueOf(item);
-                    if (!value.isBlank()) {
-                        values.add(value);
-                    }
-                }
-            }
-        }
-        values.addAll(additions.stream().filter(item -> item != null && !item.isBlank()).toList());
-        memory.put(fieldName, List.copyOf(values));
     }
 
     private AgentTurnResult enrichTurnResult(AgentTurnResult turnResult,
@@ -307,7 +238,8 @@ public class TomDeliberationPolicy implements DeliberationPolicy {
 
     private Map<String, Object> beliefTrace(AgentTurnRequest beliefRequest,
                                             StructuredInferenceResult structuredResult,
-                                            TomBeliefStageResult beliefStageResult) {
+                                            TomBeliefStageResult beliefStageResult,
+                                            int attempts) {
         Map<String, Object> trace = new LinkedHashMap<>();
         trace.put("stageId", "belief-stage");
         trace.put("mode", "structured-inference");
@@ -316,7 +248,7 @@ public class TomDeliberationPolicy implements DeliberationPolicy {
         trace.put("provider", beliefRequest.getProvider());
         trace.put("modelId", beliefRequest.getModelId());
         trace.put("modelName", beliefRequest.getModelName());
-        trace.put("attempts", 1);
+        trace.put("attempts", attempts);
         trace.put("beliefCount", beliefStageResult.getBeliefsByPlayerId().size());
         if (beliefStageResult.getStrategyMode() != null) {
             trace.put("strategyMode", beliefStageResult.getStrategyMode());
@@ -332,7 +264,7 @@ public class TomDeliberationPolicy implements DeliberationPolicy {
         return trace;
     }
 
-    private Map<String, Object> failedBeliefTrace(AgentTurnRequest beliefRequest, Throwable throwable) {
+    private Map<String, Object> failedBeliefTrace(AgentTurnRequest beliefRequest, int attempts, Throwable throwable) {
         Map<String, Object> trace = new LinkedHashMap<>();
         trace.put("stageId", "belief-stage");
         trace.put("mode", "structured-inference");
@@ -341,7 +273,7 @@ public class TomDeliberationPolicy implements DeliberationPolicy {
         trace.put("provider", beliefRequest.getProvider());
         trace.put("modelId", beliefRequest.getModelId());
         trace.put("modelName", beliefRequest.getModelName());
-        trace.put("attempts", 1);
+        trace.put("attempts", attempts);
         if (throwable != null && throwable.getMessage() != null) {
             trace.put("errorMessage", throwable.getMessage());
         }
@@ -404,13 +336,14 @@ public class TomDeliberationPolicy implements DeliberationPolicy {
                                                      StructuredInferenceResult structuredResult,
                                                      AgentTurnResult turnResult,
                                                      TomBeliefStageResult beliefStageResult,
+                                                     int beliefAttempts,
                                                      int decisionAttempts) {
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put("policyId", policyId());
         summary.put("strategyProfileId", decisionRequest.getStrategyProfileId());
         summary.put("status", "COMPLETED");
         summary.put("stageCount", 2);
-        summary.put("modelCalls", 1 + decisionAttempts);
+        summary.put("modelCalls", beliefAttempts + decisionAttempts);
         summary.put("modelSlotIds", List.of(decisionRequest.getModelSlotId()));
         summary.put("beliefCount", beliefStageResult.getBeliefsByPlayerId().size());
         long inputTokens = tokenValue(structuredResult.getModelMetadata()) + tokenValue(turnResult == null ? null : turnResult.getModelMetadata());

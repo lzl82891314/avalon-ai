@@ -19,5 +19,10 @@ spring:
 
 avalon:
   app-name: Avalon AI
+  agent:
+    # When player.agentConfig.agentPolicyId is not set, use this policy as the app-level default.
+    # Supported values: legacy-single-shot, tom-v1, tom-tot-v1, tom-tot-critic-v1
+    # default-policy-id: tom-v1
+    default-policy-id: tom-tot-critic-v1
   console:
     enabled: false

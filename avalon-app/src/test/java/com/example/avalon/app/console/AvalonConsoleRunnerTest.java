@@ -91,11 +91,11 @@ class AvalonConsoleRunnerTest {
     }
 
     @Test
-    void promptSeatBindingSelectionShouldPreferOpenAiProfileForAllDefaults() {
+    void promptSeatBindingSelectionShouldRotateAcrossAdmissionEligibleProfilesForDefaults() {
         AvalonConsoleRunner runner = runnerWithProfiles(List.of(
-                profile("glm-5", "glm"),
+                admittedProfile("glm-5", "glm"),
                 profile("openai-gpt-5.4", "openai"),
-                profile("minimax-m2.7", "minimax")
+                admittedProfile("minimax-m2.7", "minimax")
         ));
 
         CreateGameRequest.LlmSelectionRequest request = ReflectionTestUtils.invokeMethod(
@@ -107,21 +107,21 @@ class AvalonConsoleRunnerTest {
 
         assertThat(request.getSeatBindings())
                 .containsExactlyEntriesOf(orderedSeatBindings(
-                        1, "openai-gpt-5.4",
+                        1, "glm-5",
                         2, "openai-gpt-5.4",
-                        3, "openai-gpt-5.4",
-                        4, "openai-gpt-5.4",
+                        3, "minimax-m2.7",
+                        4, "glm-5",
                         5, "openai-gpt-5.4",
-                        6, "openai-gpt-5.4"
+                        6, "minimax-m2.7"
                 ));
     }
 
     @Test
-    void promptRoleBindingSelectionShouldPreferOpenAiProfileForAllDefaults() {
+    void promptRoleBindingSelectionShouldRotateAcrossAdmissionEligibleProfilesForDefaults() {
         AvalonConsoleRunner runner = runnerWithProfiles(List.of(
-                profile("glm-5", "glm"),
+                admittedProfile("glm-5", "glm"),
                 profile("openai-gpt-5.4", "openai"),
-                profile("minimax-m2.7", "minimax")
+                admittedProfile("minimax-m2.7", "minimax")
         ));
 
         CreateGameRequest.LlmSelectionRequest request = ReflectionTestUtils.invokeMethod(
@@ -133,20 +133,20 @@ class AvalonConsoleRunnerTest {
 
         assertThat(request.getRoleBindings())
                 .containsExactlyEntriesOf(orderedBindings(
-                        "MERLIN", "openai-gpt-5.4",
+                        "MERLIN", "glm-5",
                         "PERCIVAL", "openai-gpt-5.4",
-                        "LOYAL_SERVANT", "openai-gpt-5.4",
-                        "MORGANA", "openai-gpt-5.4",
+                        "LOYAL_SERVANT", "minimax-m2.7",
+                        "MORGANA", "glm-5",
                         "ASSASSIN", "openai-gpt-5.4"
                 ));
     }
 
     @Test
-    void promptRoleBindingSelectionShouldFallbackToFirstProfileWhenOpenAiIsUnavailable() {
+    void promptRoleBindingSelectionShouldRotateAcrossEligibleProfilesWhenOpenAiIsUnavailable() {
         AvalonConsoleRunner runner = runnerWithProfiles(List.of(
-                profile("model-a", "glm"),
-                profile("model-b", "minimax"),
-                profile("model-c", "claude")
+                admittedProfile("model-a", "glm"),
+                admittedProfile("model-b", "minimax"),
+                admittedProfile("model-c", "claude")
         ));
 
         CreateGameRequest.LlmSelectionRequest request = ReflectionTestUtils.invokeMethod(
@@ -159,10 +159,10 @@ class AvalonConsoleRunnerTest {
         assertThat(request.getRoleBindings())
                 .containsExactlyEntriesOf(orderedBindings(
                         "MERLIN", "model-a",
-                        "PERCIVAL", "model-a",
-                        "LOYAL_SERVANT", "model-a",
+                        "PERCIVAL", "model-b",
+                        "LOYAL_SERVANT", "model-c",
                         "MORGANA", "model-a",
-                        "ASSASSIN", "model-a"
+                        "ASSASSIN", "model-b"
                 ));
     }
 
@@ -186,10 +186,10 @@ class AvalonConsoleRunnerTest {
         assertThat(request.getRoleBindings())
                 .containsExactlyEntriesOf(orderedBindings(
                         "MERLIN", "model-a",
-                        "PERCIVAL", "model-a",
-                        "LOYAL_SERVANT", "model-a",
-                        "MORGANA", "model-a",
-                        "ASSASSIN", "model-a"
+                        "PERCIVAL", "model-b",
+                        "LOYAL_SERVANT", "model-c",
+                        "MORGANA", "model-d",
+                        "ASSASSIN", "model-e"
                 ));
     }
 
@@ -422,6 +422,14 @@ class AvalonConsoleRunnerTest {
     }
 
     private ModelProfileResponse profile(String modelId, String provider) {
+        return profile(modelId, provider, "openai".equals(provider));
+    }
+
+    private ModelProfileResponse admittedProfile(String modelId, String provider) {
+        return profile(modelId, provider, true);
+    }
+
+    private ModelProfileResponse profile(String modelId, String provider, boolean admissionEligible) {
         ModelProfileResponse response = new ModelProfileResponse();
         response.setModelId(modelId);
         response.setDisplayName(modelId);
@@ -429,6 +437,11 @@ class AvalonConsoleRunnerTest {
         response.setEnabled(true);
         response.setProvider(provider);
         response.setModelName(modelId);
+        if (admissionEligible) {
+            response.setProviderOptions(Map.of(
+                    "avalonRuntime", Map.of("admissionEligible", true)
+            ));
+        }
         return response;
     }
 

@@ -61,7 +61,7 @@ public class PromptBuilder {
                 .append("如果确实需要提供 memoryUpdate，最小合法示例：")
                 .append(System.lineSeparator())
                 .append("{\"action\":{\"actionType\":\"PUBLIC_SPEECH\",\"speechText\":\"我先给出公开看法。\"},\"publicSpeech\":\"我先给出公开看法。\",\"memoryUpdate\":{\"observationsToAdd\":[\"记录一条新观察\"],\"strategyMode\":\"BALANCED\",\"lastSummary\":\"保持低风险验证。\"}}");
-        if ("minimax".equals(OpenAiCompatibleSupport.providerId(request.getProvider()))) {
+        if (OpenAiCompatibleSupport.highCompression(request.getProvider(), request.getProviderOptions())) {
             builder.append(System.lineSeparator())
                     .append("""
                             兼容要求：

@@ -1,20 +1,25 @@
 package com.example.avalon.agent.service;
 
+import com.example.avalon.agent.gateway.AvalonRuntimeStageBudget;
 import com.example.avalon.agent.gateway.ModelGateway;
 import com.example.avalon.agent.gateway.OpenAiCompatibleResponseException;
+import com.example.avalon.agent.gateway.OpenAiCompatibleSupport;
 import com.example.avalon.agent.model.AgentTurnRequest;
 import com.example.avalon.agent.model.AgentTurnResult;
 import com.example.avalon.core.game.model.PlayerAction;
 import com.example.avalon.core.game.model.PlayerTurnContext;
 import org.springframework.stereotype.Component;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 @Component
 public class ValidationRetryPolicy {
     private static final int DEFAULT_MAX_ATTEMPTS = 2;
     private static final int MIN_CORRECTIVE_MAX_TOKENS = 320;
+    private static final String DECISION_STAGE_ID = "decision-stage";
 
     private final PrivateKnowledgeExpressionValidator privateKnowledgeExpressionValidator;
 
@@ -32,8 +37,9 @@ public class ValidationRetryPolicy {
                                       ResponseParser responseParser) {
         RuntimeException lastFailure = null;
         AgentTurnResult lastResult = null;
-        AgentTurnRequest attemptRequest = request.copy();
-        for (int attempts = 1; attempts <= DEFAULT_MAX_ATTEMPTS; attempts++) {
+        AgentTurnRequest attemptRequest = applyStageBudget(request.copy());
+        int maxAttempts = maxAttempts(attemptRequest);
+        for (int attempts = 1; attempts <= maxAttempts; attempts++) {
             try {
                 AgentTurnResult result = modelGateway.playTurn(attemptRequest);
                 lastResult = result;
@@ -42,7 +48,7 @@ public class ValidationRetryPolicy {
                 return new ValidatedAgentTurn(result, action, attempts, attemptRequest.copy());
             } catch (RuntimeException exception) {
                 lastFailure = exception;
-                if (attempts < DEFAULT_MAX_ATTEMPTS && shouldRetry(exception)) {
+                if (attempts < maxAttempts && shouldRetry(exception)) {
                     attemptRequest = nextAttemptRequest(attemptRequest, exception);
                     continue;
                 }
@@ -56,20 +62,20 @@ public class ValidationRetryPolicy {
             }
         }
         throw new AgentTurnExecutionException(
-                "Agent turn validation failed after " + DEFAULT_MAX_ATTEMPTS + " attempts",
+                "Agent turn validation failed after " + maxAttempts + " attempts",
                 attemptRequest,
                 lastResult,
-                DEFAULT_MAX_ATTEMPTS,
+                maxAttempts,
                 lastFailure
         );
     }
 
     private AgentTurnRequest nextAttemptRequest(AgentTurnRequest request, RuntimeException failure) {
-        AgentTurnRequest next = request.copy();
+        AgentTurnRequest next = applyStageBudget(request.copy());
         String correctivePrompt = correctivePrompt(failure, next.getAllowedActions());
         if (correctivePrompt != null && !correctivePrompt.isBlank()) {
             next.setPromptText(appendPrompt(next.getPromptText(), correctivePrompt));
-            next.setMaxTokens(raisedMaxTokens(next.getMaxTokens()));
+            next.setMaxTokens(raisedMaxTokens(next));
         }
         return next;
     }
@@ -87,8 +93,49 @@ public class ValidationRetryPolicy {
         return ResponseRetrySupport.requiresCompressionRetry(responseException);
     }
 
-    private int raisedMaxTokens(Integer currentMaxTokens) {
-        return ResponseRetrySupport.raisedMaxTokens(currentMaxTokens, MIN_CORRECTIVE_MAX_TOKENS);
+    private int raisedMaxTokens(AgentTurnRequest request) {
+        AvalonRuntimeStageBudget stageBudget = OpenAiCompatibleSupport.stageBudget(
+                request.getProvider(),
+                request.getProviderOptions(),
+                DECISION_STAGE_ID
+        );
+        int minimumCorrectiveMaxTokens = stageBudget != null && stageBudget.maxTokens() != null
+                ? Math.max(MIN_CORRECTIVE_MAX_TOKENS, stageBudget.maxTokens())
+                : MIN_CORRECTIVE_MAX_TOKENS;
+        return ResponseRetrySupport.raisedMaxTokens(request.getMaxTokens(), minimumCorrectiveMaxTokens);
+    }
+
+    private AgentTurnRequest applyStageBudget(AgentTurnRequest request) {
+        AvalonRuntimeStageBudget stageBudget = OpenAiCompatibleSupport.stageBudget(
+                request.getProvider(),
+                request.getProviderOptions(),
+                DECISION_STAGE_ID
+        );
+        if (stageBudget == null) {
+            return request;
+        }
+        if (stageBudget.maxTokens() != null) {
+            int currentMaxTokens = request.getMaxTokens() == null ? 0 : request.getMaxTokens();
+            request.setMaxTokens(Math.max(currentMaxTokens, stageBudget.maxTokens()));
+        }
+        if (stageBudget.timeout() != null) {
+            Map<String, Object> providerOptions = new LinkedHashMap<>(request.getProviderOptions());
+            providerOptions.put("timeoutMillis", stageBudget.timeout().toMillis());
+            request.setProviderOptions(providerOptions);
+        }
+        return request;
+    }
+
+    private int maxAttempts(AgentTurnRequest request) {
+        AvalonRuntimeStageBudget stageBudget = OpenAiCompatibleSupport.stageBudget(
+                request.getProvider(),
+                request.getProviderOptions(),
+                DECISION_STAGE_ID
+        );
+        if (stageBudget == null || stageBudget.maxAttempts() == null) {
+            return DEFAULT_MAX_ATTEMPTS;
+        }
+        return Math.max(1, stageBudget.maxAttempts());
     }
 
     private String appendPrompt(String originalPrompt, String correctivePrompt) {

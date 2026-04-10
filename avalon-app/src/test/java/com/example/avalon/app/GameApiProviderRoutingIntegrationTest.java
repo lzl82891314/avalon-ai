@@ -33,7 +33,10 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@SpringBootTest(classes = AvalonApplication.class)
+@SpringBootTest(
+        classes = AvalonApplication.class,
+        properties = "avalon.agent.default-policy-id=legacy-single-shot"
+)
 @AutoConfigureMockMvc
 class GameApiProviderRoutingIntegrationTest {
     @Autowired
@@ -134,7 +137,7 @@ class GameApiProviderRoutingIntegrationTest {
         JsonNode secondRequestBody = objectMapper.readTree(bodies.get(1));
 
         assertThat(firstRequestBody.path("max_completion_tokens").asInt()).isEqualTo(640);
-        assertThat(secondRequestBody.path("max_completion_tokens").asInt()).isEqualTo(640);
+        assertThat(secondRequestBody.path("max_completion_tokens").asInt()).isEqualTo(960);
         assertThat(secondRequestBody.path("messages").get(1).path("content").asText()).contains("优先先写 action");
     }
 

@@ -196,6 +196,57 @@ class OpenAiChatCompletionsGatewayTest {
     }
 
     @Test
+    void shouldDeriveCompatibilityOptionsFromAvalonRuntimeWithoutForwardingIt() throws Exception {
+        AtomicReference<String> bodyRef = new AtomicReference<>();
+        AtomicReference<Duration> timeoutRef = new AtomicReference<>();
+        OpenAiHttpTransport transport = (uri, headers, requestBody, timeout) -> {
+            bodyRef.set(requestBody);
+            timeoutRef.set(timeout);
+            return json("""
+                    {
+                      "choices":[
+                        {
+                          "message":{
+                            "content":"{\\"action\\":{\\"actionType\\":\\"PUBLIC_SPEECH\\",\\"speechText\\":\\"hi\\"}}"
+                          }
+                        }
+                      ]
+                    }
+                    """);
+        };
+        OpenAiChatCompletionsGateway gateway = new OpenAiChatCompletionsGateway(transport, name -> null);
+        AgentTurnRequest request = new AgentTurnRequest();
+        request.setProvider("glm");
+        request.setModelName("glm-5");
+        request.setTemperature(0.2);
+        request.setMaxTokens(180);
+        request.setPromptText("Return JSON.");
+        request.setOutputSchemaVersion("v1");
+        request.setProviderOptions(Map.of(
+                "apiKey", "test-key",
+                "baseUrl", "https://api.openai.test/v1",
+                "avalonRuntime", Map.of(
+                        "admissionEligible", true,
+                        "instructionRole", "system",
+                        "enableReasoningSplit", true,
+                        "responseFormatJsonObject", true,
+                        "defaultTimeoutMillis", 4321,
+                        "minimumCompletionTokens", 720
+                )
+        ));
+
+        gateway.playTurn(request);
+
+        JsonNode requestBody = objectMapper.readTree(bodyRef.get());
+        assertFalse(requestBody.has("avalonRuntime"));
+        assertEquals("system", requestBody.path("messages").get(0).path("role").asText());
+        assertEquals("json_object", requestBody.path("response_format").path("type").asText());
+        assertEquals(true, requestBody.path("reasoning_split").asBoolean());
+        assertEquals(720, requestBody.path("max_completion_tokens").asInt());
+        assertEquals(Duration.ofMillis(4321), timeoutRef.get());
+    }
+
+    @Test
     void shouldDefaultToDeveloperInstructionForNonMinimaxProviders() throws Exception {
         AtomicReference<String> bodyRef = new AtomicReference<>();
         OpenAiHttpTransport transport = (uri, headers, requestBody, timeout) -> {

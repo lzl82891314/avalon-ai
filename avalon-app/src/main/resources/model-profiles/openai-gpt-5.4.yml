@@ -10,3 +10,25 @@ providerOptions:
   timeoutMillis: 120000
   response_format:
     type: json_object
+  avalonRuntime:
+    profileId: openai-gpt-5.4-avalon-v1
+    admissionEligible: true
+    promptCompressionLevel: normal
+    totCandidateCount: 3
+    stageBudgets:
+      belief-stage:
+        maxTokens: 960
+        timeoutMillis: 120000
+        maxAttempts: 2
+      tot-stage:
+        maxTokens: 1280
+        timeoutMillis: 120000
+        maxAttempts: 2
+      critic-stage:
+        maxTokens: 800
+        timeoutMillis: 120000
+        maxAttempts: 2
+      decision-stage:
+        maxTokens: 640
+        timeoutMillis: 120000
+        maxAttempts: 2

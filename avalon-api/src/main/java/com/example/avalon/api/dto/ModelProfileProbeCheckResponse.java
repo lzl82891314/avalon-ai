@@ -2,6 +2,9 @@ package com.example.avalon.api.dto;
 
 public class ModelProfileProbeCheckResponse {
     private String checkType;
+    private String stageId;
+    private String diagnosisCode;
+    private String requestProfileId;
     private boolean success;
     private Integer httpStatus;
     private Long latencyMs;
@@ -19,6 +22,30 @@ public class ModelProfileProbeCheckResponse {
 
     public void setCheckType(String checkType) {
         this.checkType = checkType;
+    }
+
+    public String getStageId() {
+        return stageId;
+    }
+
+    public void setStageId(String stageId) {
+        this.stageId = stageId;
+    }
+
+    public String getDiagnosisCode() {
+        return diagnosisCode;
+    }
+
+    public void setDiagnosisCode(String diagnosisCode) {
+        this.diagnosisCode = diagnosisCode;
+    }
+
+    public String getRequestProfileId() {
+        return requestProfileId;
+    }
+
+    public void setRequestProfileId(String requestProfileId) {
+        this.requestProfileId = requestProfileId;
     }
 
     public boolean isSuccess() {

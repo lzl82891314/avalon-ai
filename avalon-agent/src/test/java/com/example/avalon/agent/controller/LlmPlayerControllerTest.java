@@ -220,7 +220,7 @@ class LlmPlayerControllerTest {
                         )
                 );
             }
-            assertEquals(640, request.getMaxTokens());
+            assertEquals(960, request.getMaxTokens());
             assertTrue(request.getPromptText().contains("优先先写 action"));
             AgentTurnResult result = new AgentTurnResult();
             result.setActionJson("{\"actionType\":\"TEAM_VOTE\",\"vote\":\"APPROVE\"}");
@@ -244,7 +244,7 @@ class LlmPlayerControllerTest {
 
         assertEquals(2, result.rawMetadata().get("attempts"));
         Map<String, Object> inputContext = rawMap(result.rawMetadata().get("inputContext"));
-        assertEquals(640, inputContext.get("maxTokens"));
+        assertEquals(960, inputContext.get("maxTokens"));
         assertTrue(String.valueOf(inputContext.get("promptText")).contains("优先先写 action"));
     }
 

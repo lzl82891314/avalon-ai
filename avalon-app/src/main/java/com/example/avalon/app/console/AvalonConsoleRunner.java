@@ -1,6 +1,8 @@
 package com.example.avalon.app.console;
 
+import com.example.avalon.agent.gateway.OpenAiCompatibleSupport;
 import com.example.avalon.agent.model.PlayerAgentConfig;
+import com.example.avalon.agent.service.AgentPolicyIds;
 import com.example.avalon.api.dto.CreateGameRequest;
 import com.example.avalon.api.dto.GameAuditEntryResponse;
 import com.example.avalon.api.dto.GameEventEntryResponse;
@@ -19,6 +21,7 @@ import com.example.avalon.core.setup.model.SetupTemplate;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.stereotype.Component;
@@ -55,6 +58,7 @@ public class AvalonConsoleRunner implements ApplicationRunner {
     private final ConsolePlaybackDelayer playbackDelayer;
     private final ConfigurableApplicationContext applicationContext;
     private final Path reportOutputDir;
+    private final String defaultAgentPolicyId;
     private final ConsoleGameSession session = new ConsoleGameSession();
 
     public AvalonConsoleRunner(GameApplicationService gameApplicationService,
@@ -66,8 +70,37 @@ public class AvalonConsoleRunner implements ApplicationRunner {
                                ConsoleDecisionReportBuilder decisionReportBuilder,
                                ConsolePlaybackSettings playbackSettings,
                                ConsolePlaybackDelayer playbackDelayer,
-                               @Value("${avalon.console.report.output-dir:target/reports/avalon}") String reportOutputDir,
+                               String reportOutputDir,
                                ConfigurableApplicationContext applicationContext) {
+        this(
+                gameApplicationService,
+                modelProfileCatalogService,
+                modelProfileProbeService,
+                configRegistry,
+                seedGenerator,
+                printer,
+                decisionReportBuilder,
+                playbackSettings,
+                playbackDelayer,
+                reportOutputDir,
+                applicationContext,
+                null
+        );
+    }
+
+    @Autowired
+    public AvalonConsoleRunner(GameApplicationService gameApplicationService,
+                               ModelProfileCatalogService modelProfileCatalogService,
+                               ModelProfileProbeService modelProfileProbeService,
+                               AvalonConfigRegistry configRegistry,
+                               SeedGenerator seedGenerator,
+                               ConsoleTranscriptPrinter printer,
+                               ConsoleDecisionReportBuilder decisionReportBuilder,
+                               ConsolePlaybackSettings playbackSettings,
+                               ConsolePlaybackDelayer playbackDelayer,
+                               @Value("${avalon.console.report.output-dir:target/reports/avalon}") String reportOutputDir,
+                               ConfigurableApplicationContext applicationContext,
+                               @Value("${avalon.agent.default-policy-id:}") String defaultAgentPolicyId) {
         this.gameApplicationService = gameApplicationService;
         this.modelProfileCatalogService = modelProfileCatalogService;
         this.modelProfileProbeService = modelProfileProbeService;
@@ -79,6 +112,9 @@ public class AvalonConsoleRunner implements ApplicationRunner {
         this.playbackDelayer = playbackDelayer;
         this.reportOutputDir = Path.of(reportOutputDir);
         this.applicationContext = applicationContext;
+        this.defaultAgentPolicyId = defaultAgentPolicyId == null || defaultAgentPolicyId.isBlank()
+                ? AgentPolicyIds.LEGACY_SINGLE_SHOT
+                : defaultAgentPolicyId;
     }
 
     @Override
@@ -502,20 +538,23 @@ public class AvalonConsoleRunner implements ApplicationRunner {
     }
 
     private List<String> defaultBindingModelIds(List<ModelProfileResponse> profiles, int requiredCount) {
-        String defaultModelId = preferredDefaultModelId(profiles);
+        List<ModelProfileResponse> eligibleProfiles = admissionEligibleProfiles(profiles);
+        if (eligibleProfiles.isEmpty()) {
+            throw new IllegalStateException(
+                    "当前没有对默认策略 " + defaultAgentPolicyId + " 通过 admission 的 model profile。请在 providerOptions.avalonRuntime 中配置 admissionEligible。"
+            );
+        }
         List<String> defaultModelIds = new ArrayList<>();
         for (int index = 0; index < requiredCount; index++) {
-            defaultModelIds.add(defaultModelId);
+            defaultModelIds.add(eligibleProfiles.get(index % eligibleProfiles.size()).getModelId());
         }
         return defaultModelIds;
     }
 
-    private String preferredDefaultModelId(List<ModelProfileResponse> profiles) {
+    private List<ModelProfileResponse> admissionEligibleProfiles(List<ModelProfileResponse> profiles) {
         return profiles.stream()
-                .filter(profile -> "openai".equalsIgnoreCase(profile.getProvider()))
-                .map(ModelProfileResponse::getModelId)
-                .findFirst()
-                .orElseGet(() -> profiles.getFirst().getModelId());
+                .filter(profile -> OpenAiCompatibleSupport.admissionEligible(profile.getProvider(), profile.getProviderOptions()))
+                .toList();
     }
 
     private void printDefaultSeatBindings(List<Integer> seatNos, List<String> defaultModelIds) {
@@ -688,9 +727,14 @@ public class AvalonConsoleRunner implements ApplicationRunner {
         ModelProfileProbeRequest request = new ModelProfileProbeRequest();
         if (parts.length >= 3 && !parts[2].isBlank()) {
             request.setChecks(switch (parts[2].trim().toLowerCase(Locale.ROOT)) {
-                case "all" -> List.of("CONNECTIVITY", "STRUCTURED_JSON");
+                case "all" -> List.of("CONNECTIVITY", "AVALON_BELIEF", "AVALON_TOT", "AVALON_CRITIC", "AVALON_DECISION");
+                case "avalon" -> List.of("AVALON_BELIEF", "AVALON_TOT", "AVALON_CRITIC", "AVALON_DECISION");
                 case "connectivity", "connect" -> List.of("CONNECTIVITY");
                 case "structured", "json" -> List.of("STRUCTURED_JSON");
+                case "belief" -> List.of("AVALON_BELIEF");
+                case "tot" -> List.of("AVALON_TOT");
+                case "critic" -> List.of("AVALON_CRITIC");
+                case "decision" -> List.of("AVALON_DECISION");
                 default -> throw new IllegalArgumentException("不支持的 probe 模式：" + parts[2]);
             });
         }

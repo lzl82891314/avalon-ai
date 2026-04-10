@@ -1,6 +1,9 @@
 package com.example.avalon.api.service;
 
+import com.example.avalon.agent.gateway.AvalonRuntimeCompatibilityProfile;
+import com.example.avalon.agent.gateway.AvalonRuntimeStageBudget;
 import com.example.avalon.agent.gateway.OpenAiCompatibleMessageAnalysis;
+import com.example.avalon.agent.gateway.OpenAiCompatibleResponseException;
 import com.example.avalon.agent.gateway.OpenAiCompatibleSupport;
 import com.example.avalon.agent.gateway.OpenAiHttpTransport;
 import com.example.avalon.agent.gateway.ModelProfileApiKeyResolver;
@@ -29,7 +32,6 @@ import java.util.regex.Pattern;
 
 @Service
 public class ModelProfileProbeService {
-    private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(30);
     private static final List<ProbeCheckType> DEFAULT_CHECKS = List.of(
             ProbeCheckType.CONNECTIVITY,
             ProbeCheckType.STRUCTURED_JSON
@@ -51,15 +53,25 @@ public class ModelProfileProbeService {
 
     public ModelProfileProbeResponse probe(String modelId, ModelProfileProbeRequest request) {
         CatalogModelProfile profile = modelProfileCatalogService.requireCatalogProfile(modelId);
+        AvalonRuntimeCompatibilityProfile compatibility = OpenAiCompatibleSupport.compatibilityProfile(
+                profile.provider(),
+                profile.providerOptions()
+        );
         List<ProbeCheckType> checksToRun = normalizeChecks(request == null ? List.of() : request.getChecks());
 
         List<ModelProfileProbeCheckResponse> checks = new ArrayList<>();
-        if (checksToRun.contains(ProbeCheckType.CONNECTIVITY)) {
-            checks.add(runConnectivityCheck(profile));
+        for (ProbeCheckType checkType : checksToRun) {
+            checks.add(runCheck(profile, compatibility, checkType));
         }
-        if (checksToRun.contains(ProbeCheckType.STRUCTURED_JSON)) {
-            checks.add(runStructuredJsonCheck(profile));
-        }
+
+        Boolean reachable = checkResult(checks, ProbeCheckType.CONNECTIVITY);
+        Boolean structuredCompatible = structuredCompatibility(checks);
+        Boolean avalonCompatible = avalonCompatibility(checks, structuredCompatible);
+        List<String> failedStages = failedStages(checks);
+        boolean configuredAdmission = OpenAiCompatibleSupport.admissionEligible(profile.provider(), profile.providerOptions());
+        Boolean admissionEligible = configuredAdmission
+                && !Boolean.FALSE.equals(structuredCompatible)
+                && !Boolean.FALSE.equals(avalonCompatible);
 
         ModelProfileProbeResponse response = new ModelProfileProbeResponse();
         response.setModelId(profile.modelId());
@@ -67,9 +79,12 @@ public class ModelProfileProbeService {
         response.setModelName(profile.modelName());
         response.setBaseUrl(defaultBaseUrl(OpenAiCompatibleSupport.stringOption(profile.providerOptions(), "baseUrl")));
         response.setChecks(checks);
-        response.setReachable(checkResult(checks, ProbeCheckType.CONNECTIVITY));
-        response.setStructuredCompatible(checkResult(checks, ProbeCheckType.STRUCTURED_JSON));
-        response.setDiagnosis(diagnosis(response.getReachable(), response.getStructuredCompatible()));
+        response.setReachable(reachable);
+        response.setStructuredCompatible(structuredCompatible);
+        response.setAvalonCompatible(avalonCompatible);
+        response.setAdmissionEligible(admissionEligible);
+        response.setFailedStages(failedStages);
+        response.setDiagnosis(diagnosis(reachable, structuredCompatible, avalonCompatible, admissionEligible));
         return response;
     }
 
@@ -82,17 +97,93 @@ public class ModelProfileProbeService {
             if (requestedCheck == null || requestedCheck.isBlank()) {
                 continue;
             }
-            checks.add(ProbeCheckType.valueOf(requestedCheck.trim().toUpperCase(Locale.ROOT)));
+            String normalized = requestedCheck.trim().toUpperCase(Locale.ROOT);
+            switch (normalized) {
+                case "ALL" -> {
+                    checks.add(ProbeCheckType.CONNECTIVITY);
+                    checks.add(ProbeCheckType.AVALON_BELIEF);
+                    checks.add(ProbeCheckType.AVALON_TOT);
+                    checks.add(ProbeCheckType.AVALON_CRITIC);
+                    checks.add(ProbeCheckType.AVALON_DECISION);
+                }
+                case "AVALON" -> {
+                    checks.add(ProbeCheckType.AVALON_BELIEF);
+                    checks.add(ProbeCheckType.AVALON_TOT);
+                    checks.add(ProbeCheckType.AVALON_CRITIC);
+                    checks.add(ProbeCheckType.AVALON_DECISION);
+                }
+                default -> checks.add(ProbeCheckType.valueOf(normalized));
+            }
         }
         return checks.isEmpty() ? DEFAULT_CHECKS : List.copyOf(checks);
     }
 
-    private ModelProfileProbeCheckResponse runConnectivityCheck(CatalogModelProfile profile) {
+    private ModelProfileProbeCheckResponse runCheck(CatalogModelProfile profile,
+                                                    AvalonRuntimeCompatibilityProfile compatibility,
+                                                    ProbeCheckType checkType) {
+        return switch (checkType) {
+            case CONNECTIVITY -> runConnectivityCheck(profile, compatibility);
+            case STRUCTURED_JSON -> runStageCheck(
+                    profile,
+                    compatibility,
+                    checkType,
+                    "decision-stage",
+                    "你正在执行阿瓦隆 structured-json 探测。只返回一个最小合法 JSON 对象。",
+                    "当前阶段只允许 PUBLIC_SPEECH。请输出 action.actionType=PUBLIC_SPEECH 且包含 speechText。",
+                    payload -> requireAction(payload)
+            );
+            case AVALON_BELIEF -> runStageCheck(
+                    profile,
+                    compatibility,
+                    checkType,
+                    "belief-stage",
+                    "你正在执行阿瓦隆 belief-stage 探测。只返回 beliefsByPlayerId、strategyMode、lastSummary、observationsToAdd、inferredFactsToAdd。",
+                    """
+                            当前是 5 人局第 1 轮公开讨论阶段。
+                            你是 P1，身份是 LOYAL_SERVANT。
+                            请只对 P2、P3、P4、P5 建立 beliefsByPlayerId，并给出简短 strategyMode 与 summary。
+                            """.strip(),
+                    payload -> requireObjectField(payload, "beliefsByPlayerId")
+            );
+            case AVALON_TOT -> runStageCheck(
+                    profile,
+                    compatibility,
+                    checkType,
+                    "tot-stage",
+                    "你正在执行阿瓦隆 tot-stage 探测。只返回 candidates、selectedCandidateId、summary。",
+                    "请生成候选行动并预测桌面反应，最后选出一个 selectedCandidateId。",
+                    payload -> {
+                        requireField(payload, "candidates");
+                        requireField(payload, "selectedCandidateId");
+                    }
+            );
+            case AVALON_CRITIC -> runStageCheck(
+                    profile,
+                    compatibility,
+                    checkType,
+                    "critic-stage",
+                    "你正在执行阿瓦隆 critic-stage 探测。只返回 status、riskFindings、counterSignals、recommendedAdjustments、summary。",
+                    "请站在怀疑者视角审视一个候选行动，并给出 status。",
+                    payload -> requireField(payload, "status")
+            );
+            case AVALON_DECISION -> runStageCheck(
+                    profile,
+                    compatibility,
+                    checkType,
+                    "decision-stage",
+                    "你正在执行阿瓦隆 decision-stage 探测。只返回 action/publicSpeech/privateThought 的最小合法 JSON。",
+                    "当前阶段只允许 TEAM_VOTE。请输出 action.actionType=TEAM_VOTE 且 vote=APPROVE 或 REJECT。",
+                    this::requireAction
+            );
+        };
+    }
+
+    private ModelProfileProbeCheckResponse runConnectivityCheck(CatalogModelProfile profile,
+                                                                AvalonRuntimeCompatibilityProfile compatibility) {
         long startedAt = System.nanoTime();
-        ModelProfileProbeCheckResponse response = new ModelProfileProbeCheckResponse();
-        response.setCheckType(ProbeCheckType.CONNECTIVITY.name());
+        ModelProfileProbeCheckResponse response = baseCheckResponse(ProbeCheckType.CONNECTIVITY, null, compatibility.profileId());
         try {
-            RequestSettings settings = requestSettings(profile);
+            RequestSettings settings = requestSettings(profile, compatibility, null);
             JsonNode payload = transport.postChatCompletion(
                     OpenAiCompatibleSupport.endpointUri(settings.baseUrl()),
                     headers(settings),
@@ -100,6 +191,7 @@ public class ModelProfileProbeService {
                     settings.timeout()
             );
             response.setSuccess(true);
+            response.setDiagnosisCode("OK");
             response.setHttpStatus(200);
             response.setLatencyMs(elapsedMillis(startedAt));
             response.setFinishReason(textOrNull(payload.path("choices").path(0).path("finish_reason")));
@@ -107,25 +199,29 @@ public class ModelProfileProbeService {
             return response;
         } catch (RuntimeException exception) {
             response.setSuccess(false);
-            if (response.getHttpStatus() == null) {
-                response.setHttpStatus(extractStatus(exception.getMessage()));
-            }
+            response.setDiagnosisCode(diagnosisCode(exception, null));
+            response.setHttpStatus(extractStatus(exception.getMessage()));
             response.setLatencyMs(elapsedMillis(startedAt));
             response.setErrorMessage(exception.getMessage());
             return response;
         }
     }
 
-    private ModelProfileProbeCheckResponse runStructuredJsonCheck(CatalogModelProfile profile) {
+    private ModelProfileProbeCheckResponse runStageCheck(CatalogModelProfile profile,
+                                                         AvalonRuntimeCompatibilityProfile compatibility,
+                                                         ProbeCheckType checkType,
+                                                         String stageId,
+                                                         String developerPrompt,
+                                                         String userPrompt,
+                                                         StageValidator validator) {
         long startedAt = System.nanoTime();
-        ModelProfileProbeCheckResponse response = new ModelProfileProbeCheckResponse();
-        response.setCheckType(ProbeCheckType.STRUCTURED_JSON.name());
+        ModelProfileProbeCheckResponse response = baseCheckResponse(checkType, stageId, compatibility.profileId());
         try {
-            RequestSettings settings = requestSettings(profile);
+            RequestSettings settings = requestSettings(profile, compatibility, stageId);
             JsonNode payload = transport.postChatCompletion(
                     OpenAiCompatibleSupport.endpointUri(settings.baseUrl()),
                     headers(settings),
-                    structuredJsonBody(profile),
+                    structuredBody(profile, compatibility, stageId, developerPrompt, userPrompt),
                     settings.timeout()
             );
             response.setHttpStatus(200);
@@ -137,11 +233,9 @@ public class ModelProfileProbeService {
             applyAnalysis(response, analysis);
 
             JsonNode structuredPayload = OpenAiCompatibleSupport.readJson(objectMapper, analysis);
-            JsonNode actionNode = structuredPayload.get("action");
-            if (actionNode == null || actionNode.isNull() || actionNode.isMissingNode()) {
-                throw new IllegalStateException("OpenAI-compatible response did not include an action object");
-            }
+            validator.validate(structuredPayload);
             response.setSuccess(true);
+            response.setDiagnosisCode("OK");
             return response;
         } catch (RuntimeException exception) {
             response.setSuccess(false);
@@ -149,9 +243,20 @@ public class ModelProfileProbeService {
                 response.setHttpStatus(extractStatus(exception.getMessage()));
             }
             response.setLatencyMs(elapsedMillis(startedAt));
+            response.setDiagnosisCode(diagnosisCode(exception, response.getContentShape()));
             response.setErrorMessage(exception.getMessage());
             return response;
         }
+    }
+
+    private ModelProfileProbeCheckResponse baseCheckResponse(ProbeCheckType checkType,
+                                                             String stageId,
+                                                             String requestProfileId) {
+        ModelProfileProbeCheckResponse response = new ModelProfileProbeCheckResponse();
+        response.setCheckType(checkType.name());
+        response.setStageId(stageId);
+        response.setRequestProfileId(requestProfileId);
+        return response;
     }
 
     private Map<String, String> headers(RequestSettings settings) {
@@ -183,7 +288,11 @@ public class ModelProfileProbeService {
         return writeJson(root);
     }
 
-    private String structuredJsonBody(CatalogModelProfile profile) {
+    private String structuredBody(CatalogModelProfile profile,
+                                  AvalonRuntimeCompatibilityProfile compatibility,
+                                  String stageId,
+                                  String developerPrompt,
+                                  String userPrompt) {
         Map<String, Object> providerOptions = OpenAiCompatibleSupport.effectiveProviderOptions(
                 profile.provider(),
                 profile.providerOptions()
@@ -192,15 +301,15 @@ public class ModelProfileProbeService {
         root.put("model", defaultModel(profile.modelName()));
         ArrayNode messages = root.putArray("messages");
         messages.addObject()
-                .put("role", OpenAiCompatibleSupport.instructionRole(profile.provider(), providerOptions))
-                .put("content", structuredInstruction(profile.provider()));
+                .put("role", compatibility.instructionRole())
+                .put("content", developerPrompt);
         messages.addObject()
                 .put("role", "user")
-                .put("content", structuredUserPrompt(profile.provider()));
+                .put("content", userPrompt);
         if (profile.temperature() != null) {
             root.put("temperature", profile.temperature());
         }
-        int effectiveMaxTokens = OpenAiCompatibleSupport.effectiveMaxTokens(profile.provider(), profile.maxTokens());
+        int effectiveMaxTokens = stageMaxTokens(profile, stageId, providerOptions);
         if (effectiveMaxTokens > 0) {
             root.put("max_completion_tokens", effectiveMaxTokens);
         }
@@ -213,47 +322,19 @@ public class ModelProfileProbeService {
         return writeJson(root);
     }
 
-    private String structuredInstruction(String provider) {
-        StringBuilder builder = new StringBuilder("""
-                你正在控制一名阿瓦隆玩家。
-                只返回一个 JSON 对象，不要输出 Markdown、代码块、<think>、项目符号或解释文字。
-                最终输出的第一个字符必须是 {，最后一个字符必须是 }。
-                优先返回最小合法 JSON，并把第一层键按 action、publicSpeech、privateThought、auditReason、memoryUpdate 的顺序写出。
-                action 必填，且必须是合法的结构化动作 JSON。
-                publicSpeech 只在需要公开发言时才提供。
-                privateThought 可以省略或写 null；如果提供，只写一句极短中文。
-                auditReason 和 memoryUpdate 默认省略；如果提供，必须是 JSON 对象。
-                """.strip());
-        if ("minimax".equals(OpenAiCompatibleSupport.providerId(provider))) {
-            builder.append(System.lineSeparator())
-                    .append("""
-                            兼容要求：
-                            - 不要输出项目符号
-                            - 不要解释规则
-                            """.strip());
-        }
-        return builder.toString();
+    private int stageMaxTokens(CatalogModelProfile profile,
+                               String stageId,
+                               Map<String, Object> providerOptions) {
+        AvalonRuntimeStageBudget stageBudget = OpenAiCompatibleSupport.stageBudget(profile.provider(), providerOptions, stageId);
+        Integer requestedMaxTokens = stageBudget != null && stageBudget.maxTokens() != null
+                ? stageBudget.maxTokens()
+                : profile.maxTokens();
+        return OpenAiCompatibleSupport.effectiveMaxTokens(profile.provider(), providerOptions, requestedMaxTokens);
     }
 
-    private String structuredUserPrompt(String provider) {
-        StringBuilder builder = new StringBuilder("""
-                当前阶段只允许 PUBLIC_SPEECH。
-                请返回一个最小合法动作，其中 action.actionType 必须为 PUBLIC_SPEECH，
-                action.speechText 可以是一句简短中文发言。
-                除 action 外，其他字段不是必须；如果提供，请保持极短。
-                """.strip());
-        if ("minimax".equals(OpenAiCompatibleSupport.providerId(provider))) {
-            builder.append(System.lineSeparator())
-                    .append("""
-                            你的最终回复只能是一个 JSON 对象。
-                            合法示例：
-                            {"action":{"actionType":"PUBLIC_SPEECH","speechText":"我先说一句公开信息。"},"publicSpeech":"我先说一句公开信息。","privateThought":"先做一轮观察。"}
-                            """.strip());
-        }
-        return builder.toString();
-    }
-
-    private RequestSettings requestSettings(CatalogModelProfile profile) {
+    private RequestSettings requestSettings(CatalogModelProfile profile,
+                                            AvalonRuntimeCompatibilityProfile compatibility,
+                                            String stageId) {
         Map<String, Object> providerOptions = profile.providerOptions();
         String apiKey = apiKeyResolver.resolveApiKey(profile.modelId(), providerOptions);
         if (apiKey == null || apiKey.isBlank()) {
@@ -264,7 +345,10 @@ public class ModelProfileProbeService {
         String baseUrl = defaultBaseUrl(OpenAiCompatibleSupport.stringOption(providerOptions, "baseUrl"));
         String organization = OpenAiCompatibleSupport.stringOption(providerOptions, "organization");
         String project = OpenAiCompatibleSupport.stringOption(providerOptions, "project");
-        Duration timeout = timeout(profile.provider(), providerOptions.get("timeoutMillis"));
+        AvalonRuntimeStageBudget stageBudget = stageId == null ? null : compatibility.stageBudget(stageId);
+        Duration timeout = stageBudget != null && stageBudget.timeout() != null
+                ? stageBudget.timeout()
+                : compatibility.defaultTimeout();
         return new RequestSettings(baseUrl, apiKey, organization, project, timeout);
     }
 
@@ -295,6 +379,27 @@ public class ModelProfileProbeService {
         response.setReasoningDetailsPreview(analysis.reasoningDetailsPreview());
     }
 
+    private void requireAction(JsonNode payload) {
+        JsonNode actionNode = payload.get("action");
+        if (actionNode == null || actionNode.isNull() || actionNode.isMissingNode() || !actionNode.isObject()) {
+            throw new IllegalStateException("action object missing");
+        }
+    }
+
+    private void requireObjectField(JsonNode payload, String fieldName) {
+        JsonNode node = payload.get(fieldName);
+        if (node == null || node.isNull() || node.isMissingNode() || !node.isObject() || node.isEmpty()) {
+            throw new IllegalStateException(fieldName + " missing");
+        }
+    }
+
+    private void requireField(JsonNode payload, String fieldName) {
+        JsonNode node = payload.get(fieldName);
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            throw new IllegalStateException(fieldName + " missing");
+        }
+    }
+
     private Integer extractStatus(String errorMessage) {
         if (errorMessage == null || errorMessage.isBlank()) {
             return null;
@@ -306,15 +411,24 @@ public class ModelProfileProbeService {
         return Integer.parseInt(matcher.group(1));
     }
 
-    private String diagnosis(Boolean reachable, Boolean structuredCompatible) {
+    private String diagnosis(Boolean reachable,
+                             Boolean structuredCompatible,
+                             Boolean avalonCompatible,
+                             Boolean admissionEligible) {
         if (Boolean.FALSE.equals(reachable)) {
             return "NETWORK_OR_AUTH_FAILED";
+        }
+        if (Boolean.FALSE.equals(avalonCompatible)) {
+            return "AVALON_STAGE_FAILED";
         }
         if (Boolean.TRUE.equals(reachable) && Boolean.FALSE.equals(structuredCompatible)) {
             return "NETWORK_OK_BUT_STRUCTURED_JSON_FAILED";
         }
         if (Boolean.FALSE.equals(structuredCompatible)) {
             return "STRUCTURED_JSON_FAILED";
+        }
+        if (Boolean.FALSE.equals(admissionEligible)) {
+            return "ADMISSION_DISABLED";
         }
         return "OK";
     }
@@ -327,9 +441,30 @@ public class ModelProfileProbeService {
                 .orElse(null);
     }
 
-    private Duration timeout(String provider, Object rawTimeoutMillis) {
-        Duration timeout = OpenAiCompatibleSupport.effectiveTimeout(provider, rawTimeoutMillis);
-        return timeout == null ? DEFAULT_TIMEOUT : timeout;
+    private Boolean structuredCompatibility(List<ModelProfileProbeCheckResponse> checks) {
+        Boolean structuredJson = checkResult(checks, ProbeCheckType.STRUCTURED_JSON);
+        if (structuredJson != null) {
+            return structuredJson;
+        }
+        return checkResult(checks, ProbeCheckType.AVALON_DECISION);
+    }
+
+    private Boolean avalonCompatibility(List<ModelProfileProbeCheckResponse> checks, Boolean structuredCompatible) {
+        List<ModelProfileProbeCheckResponse> avalonChecks = checks.stream()
+                .filter(check -> check.getCheckType() != null && check.getCheckType().startsWith("AVALON_"))
+                .toList();
+        if (avalonChecks.isEmpty()) {
+            return null;
+        }
+        return avalonChecks.stream().allMatch(ModelProfileProbeCheckResponse::isSuccess);
+    }
+
+    private List<String> failedStages(List<ModelProfileProbeCheckResponse> checks) {
+        return checks.stream()
+                .filter(check -> check.getStageId() != null && !check.isSuccess())
+                .map(ModelProfileProbeCheckResponse::getStageId)
+                .distinct()
+                .toList();
     }
 
     private Long elapsedMillis(long startedAt) {
@@ -352,9 +487,45 @@ public class ModelProfileProbeService {
         return text == null || text.isBlank() ? null : text;
     }
 
+    private String diagnosisCode(RuntimeException exception, String contentShape) {
+        if (exception instanceof OpenAiCompatibleResponseException responseException
+                && "transport".equalsIgnoreCase(String.valueOf(responseException.diagnostics().get("failureDomain")))) {
+            return "TRANSPORT_FAILURE";
+        }
+        if ("truncated_json_candidate".equals(contentShape)) {
+            return "TRUNCATED_JSON";
+        }
+        if ("reasoning_only".equals(contentShape)) {
+            return "REASONING_ONLY";
+        }
+        String message = exception.getMessage() == null ? "" : exception.getMessage();
+        if (message.contains("action object")) {
+            return "MISSING_ACTION";
+        }
+        if (message.contains("beliefsByPlayerId")) {
+            return "MISSING_BELIEFS";
+        }
+        if (message.contains("selectedCandidateId")) {
+            return "MISSING_SELECTED_CANDIDATE";
+        }
+        if (message.contains("status")) {
+            return "MISSING_STATUS";
+        }
+        return "VALIDATION_FAILED";
+    }
+
     private enum ProbeCheckType {
         CONNECTIVITY,
-        STRUCTURED_JSON
+        STRUCTURED_JSON,
+        AVALON_BELIEF,
+        AVALON_TOT,
+        AVALON_CRITIC,
+        AVALON_DECISION
+    }
+
+    @FunctionalInterface
+    private interface StageValidator {
+        void validate(JsonNode payload);
     }
 
     private record RequestSettings(

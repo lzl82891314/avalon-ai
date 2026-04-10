@@ -10,7 +10,10 @@ public class ModelProfileProbeResponse {
     private String baseUrl;
     private Boolean reachable;
     private Boolean structuredCompatible;
+    private Boolean avalonCompatible;
+    private Boolean admissionEligible;
     private String diagnosis;
+    private List<String> failedStages = new ArrayList<>();
     private List<ModelProfileProbeCheckResponse> checks = new ArrayList<>();
 
     public String getModelId() {
@@ -61,12 +64,36 @@ public class ModelProfileProbeResponse {
         this.structuredCompatible = structuredCompatible;
     }
 
+    public Boolean getAvalonCompatible() {
+        return avalonCompatible;
+    }
+
+    public void setAvalonCompatible(Boolean avalonCompatible) {
+        this.avalonCompatible = avalonCompatible;
+    }
+
+    public Boolean getAdmissionEligible() {
+        return admissionEligible;
+    }
+
+    public void setAdmissionEligible(Boolean admissionEligible) {
+        this.admissionEligible = admissionEligible;
+    }
+
     public String getDiagnosis() {
         return diagnosis;
     }
 
     public void setDiagnosis(String diagnosis) {
         this.diagnosis = diagnosis;
+    }
+
+    public List<String> getFailedStages() {
+        return failedStages;
+    }
+
+    public void setFailedStages(List<String> failedStages) {
+        this.failedStages = failedStages == null ? new ArrayList<>() : new ArrayList<>(failedStages);
     }
 
     public List<ModelProfileProbeCheckResponse> getChecks() {

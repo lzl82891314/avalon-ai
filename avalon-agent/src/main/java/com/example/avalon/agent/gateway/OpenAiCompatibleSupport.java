@@ -17,11 +17,7 @@ public final class OpenAiCompatibleSupport {
     public static final String DEFAULT_BASE_URL = "https://api.openai.com/v1";
     public static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(30);
     public static final Duration HIGH_LATENCY_PROVIDER_TIMEOUT = Duration.ofSeconds(60);
-    private static final Set<String> SYSTEM_INSTRUCTION_PROVIDERS = Set.of("minimax");
-    private static final Set<String> REASONING_SPLIT_PROVIDERS = Set.of("minimax");
-    private static final Set<String> HIGH_TOKEN_BUDGET_PROVIDERS = Set.of("minimax", "glm", "claude", "qwen");
-    private static final Set<String> HIGH_LATENCY_TIMEOUT_PROVIDERS = Set.of("minimax", "glm", "claude", "qwen");
-    private static final int MIN_STRUCTURED_OUTPUT_MAX_TOKENS = 640;
+    public static final int MIN_STRUCTURED_OUTPUT_MAX_TOKENS = 640;
     private static final Set<String> LOCAL_OPTION_KEYS = Set.of(
             "apiKey",
             "apiKeyEnv",
@@ -29,7 +25,8 @@ public final class OpenAiCompatibleSupport {
             "organization",
             "project",
             "timeoutMillis",
-            "instructionRole"
+            "instructionRole",
+            "avalonRuntime"
     );
     private static final Set<String> RESERVED_REQUEST_KEYS = Set.of(
             "model",
@@ -62,15 +59,11 @@ public final class OpenAiCompatibleSupport {
     }
 
     public static String instructionRole(String provider, Map<String, Object> providerOptions) {
-        String override = stringOption(providerOptions, "instructionRole");
-        if (override != null) {
-            String normalized = override.strip().toLowerCase(Locale.ROOT);
-            if (!"system".equals(normalized) && !"developer".equals(normalized)) {
-                throw new IllegalArgumentException("instructionRole must be either 'system' or 'developer'");
-            }
-            return normalized;
+        String normalized = compatibilityProfile(provider, providerOptions).instructionRole();
+        if (!"system".equals(normalized) && !"developer".equals(normalized)) {
+            throw new IllegalArgumentException("instructionRole must be either 'system' or 'developer'");
         }
-        return SYSTEM_INSTRUCTION_PROVIDERS.contains(providerId(provider)) ? "system" : "developer";
+        return normalized;
     }
 
     public static Map<String, Object> effectiveProviderOptions(String provider, Map<String, Object> providerOptions) {
@@ -78,36 +71,71 @@ public final class OpenAiCompatibleSupport {
         if (providerOptions != null && !providerOptions.isEmpty()) {
             effective.putAll(providerOptions);
         }
-        if (REASONING_SPLIT_PROVIDERS.contains(providerId(provider))
+        AvalonRuntimeCompatibilityProfile compatibilityProfile = compatibilityProfile(provider, providerOptions);
+        if (compatibilityProfile.reasoningSplit()
                 && !effective.containsKey("reasoning_split")) {
             effective.put("reasoning_split", true);
+        }
+        if (compatibilityProfile.responseFormatJsonObject()
+                && !effective.containsKey("response_format")) {
+            effective.put("response_format", Map.of("type", "json_object"));
         }
         return effective;
     }
 
     public static int effectiveMaxTokens(String provider, Integer configuredMaxTokens) {
+        return effectiveMaxTokens(provider, Map.of(), configuredMaxTokens);
+    }
+
+    public static int effectiveMaxTokens(String provider,
+                                         Map<String, Object> providerOptions,
+                                         Integer configuredMaxTokens) {
+        int minimumCompletionTokens = compatibilityProfile(provider, providerOptions).minimumCompletionTokens();
         if (configuredMaxTokens == null) {
-            return HIGH_TOKEN_BUDGET_PROVIDERS.contains(providerId(provider))
-                    ? MIN_STRUCTURED_OUTPUT_MAX_TOKENS
-                    : 0;
+            return minimumCompletionTokens;
         }
-        if (HIGH_TOKEN_BUDGET_PROVIDERS.contains(providerId(provider))
-                && configuredMaxTokens < MIN_STRUCTURED_OUTPUT_MAX_TOKENS) {
-            return MIN_STRUCTURED_OUTPUT_MAX_TOKENS;
+        if (configuredMaxTokens < minimumCompletionTokens) {
+            return minimumCompletionTokens;
         }
         return configuredMaxTokens;
     }
 
     public static Duration effectiveTimeout(String provider, Object rawTimeoutMillis) {
-        if (rawTimeoutMillis instanceof Number number) {
-            return Duration.ofMillis(number.longValue());
+        if (rawTimeoutMillis == null) {
+            return effectiveTimeout(provider, Map.of());
         }
-        if (rawTimeoutMillis instanceof String text && !text.isBlank()) {
-            return Duration.ofMillis(Long.parseLong(text));
-        }
-        return HIGH_LATENCY_TIMEOUT_PROVIDERS.contains(providerId(provider))
-                ? HIGH_LATENCY_PROVIDER_TIMEOUT
-                : DEFAULT_TIMEOUT;
+        return effectiveTimeout(provider, Map.of("timeoutMillis", rawTimeoutMillis));
+    }
+
+    public static Duration effectiveTimeout(String provider, Map<String, Object> providerOptions) {
+        return compatibilityProfile(provider, providerOptions).defaultTimeout();
+    }
+
+    public static AvalonRuntimeCompatibilityProfile compatibilityProfile(String provider,
+                                                                         Map<String, Object> providerOptions) {
+        return AvalonRuntimeCompatibilityResolver.resolve(provider, providerOptions);
+    }
+
+    public static AvalonRuntimeStageBudget stageBudget(String provider,
+                                                       Map<String, Object> providerOptions,
+                                                       String stageId) {
+        return compatibilityProfile(provider, providerOptions).stageBudget(stageId);
+    }
+
+    public static int totCandidateCount(String provider, Map<String, Object> providerOptions) {
+        return compatibilityProfile(provider, providerOptions).totCandidateCount();
+    }
+
+    public static boolean highCompression(String provider, Map<String, Object> providerOptions) {
+        return compatibilityProfile(provider, providerOptions).highCompression();
+    }
+
+    public static boolean admissionEligible(String provider, Map<String, Object> providerOptions) {
+        return compatibilityProfile(provider, providerOptions).admissionEligible();
+    }
+
+    public static String compatibilityProfileId(String provider, Map<String, Object> providerOptions) {
+        return compatibilityProfile(provider, providerOptions).profileId();
     }
 
     public static OpenAiCompatibleMessageAnalysis analyzeAssistantMessage(JsonNode message) {

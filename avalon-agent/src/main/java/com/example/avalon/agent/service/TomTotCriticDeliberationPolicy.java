@@ -131,7 +131,11 @@ public class TomTotCriticDeliberationPolicy implements DeliberationPolicy {
             ), structuredModelGateway);
             totStructuredResult = totExecution.result();
             totAttempts = totExecution.attempts();
-            totStageResult = support.parseTotStage(totStructuredResult, policyId());
+            totStageResult = support.parseTotStage(
+                    totStructuredResult,
+                    policyId(),
+                    tomPromptFactory.totCandidateCount(totRequest)
+            );
             totTrace = support.stageTrace(
                     "tot-stage",
                     "structured-inference",

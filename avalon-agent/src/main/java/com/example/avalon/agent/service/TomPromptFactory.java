@@ -1,5 +1,6 @@
 package com.example.avalon.agent.service;
 
+import com.example.avalon.agent.gateway.OpenAiCompatibleSupport;
 import com.example.avalon.agent.model.AgentTurnRequest;
 import com.example.avalon.agent.model.TomBeliefStageResult;
 import com.example.avalon.agent.model.TomCriticStageResult;
@@ -80,6 +81,7 @@ public class TomPromptFactory {
     }
 
     public String buildTotDeveloperPrompt(AgentTurnRequest request) {
+        int candidateCount = totCandidateCount(request);
         return """
                 policyId=%s
                 stageId=tot-stage
@@ -102,10 +104,13 @@ public class TomPromptFactory {
                  每个 candidate 的 keyRisks 最多 1 条。
                  selectedCandidateId 必须指向其中一个 candidateId。
                  summary 只允许 1 句短句。
-                 """.formatted(policyId(request)).strip();
+                 """.formatted(policyId(request))
+                .replace("固定生成 3 个候选行动", "固定生成 " + candidateCount + " 个候选行动")
+                .strip();
     }
 
     public String buildTotUserPrompt(AgentTurnRequest request, TomBeliefStageResult beliefStageResult) {
+        int candidateCount = totCandidateCount(request);
         return """
                 请基于 belief stage 的结论，固定生成 3 个候选行动，分别模拟其他玩家的反应，再选出本回合最优候选。
                 policyId=%s
@@ -131,7 +136,7 @@ public class TomPromptFactory {
                 json(request.getPrivateKnowledge()),
                 json(request.getMemory()),
                 json(request.getPublicState())
-        ).strip();
+        ).replace("固定生成 3 个候选行动", "固定生成 " + candidateCount + " 个候选行动").strip();
     }
 
     public String buildCriticDeveloperPrompt(AgentTurnRequest request) {
@@ -223,6 +228,10 @@ public class TomPromptFactory {
         builder.append("上面的 beliefs、candidate 模拟和 critic 结论都属于工作假设，而非确定事实。")
                 .append(System.lineSeparator())
                 .append("最终只输出既有 action/publicSpeech/privateThought/auditReason/memoryUpdate schema，不要把 tomBeliefStage、tomTotStage、tomCriticStage 作为新的顶层字段输出。");
+        String compressionDirective = compressionDirective(request);
+        if (!compressionDirective.isBlank()) {
+            builder.append(System.lineSeparator()).append(compressionDirective);
+        }
         return builder.toString();
     }
 
@@ -295,6 +304,17 @@ public class TomPromptFactory {
             return AgentPolicyIds.TOM_V1;
         }
         return request.getAgentPolicyId();
+    }
+
+    int totCandidateCount(AgentTurnRequest request) {
+        return OpenAiCompatibleSupport.totCandidateCount(request.getProvider(), request.getProviderOptions());
+    }
+
+    private String compressionDirective(AgentTurnRequest request) {
+        if (!OpenAiCompatibleSupport.highCompression(request.getProvider(), request.getProviderOptions())) {
+            return "";
+        }
+        return "高压缩兼容要求：优先短语，避免多句展开，能省略的字段就省略。";
     }
 
     private String json(Object value) {

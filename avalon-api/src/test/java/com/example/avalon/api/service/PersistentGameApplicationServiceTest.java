@@ -216,6 +216,53 @@ class PersistentGameApplicationServiceTest {
         assertSame(gameOrchestrator.createdState, persistenceService.persistedState);
     }
 
+    @Test
+    void createGameShouldRejectNonAdmittedModelProfile() {
+        AvalonConfigRegistry configRegistry = sixPlayerConfigRegistryWithModel(
+                "glm",
+                Map.of("avalonRuntime", Map.of("admissionEligible", false))
+        );
+        CapturingGameOrchestrator gameOrchestrator = new CapturingGameOrchestrator();
+        CapturingRuntimePersistenceService persistenceService = new CapturingRuntimePersistenceService();
+
+        PersistentGameApplicationService service = new PersistentGameApplicationService(
+                configRegistry,
+                gameOrchestrator,
+                new GameSessionService(),
+                persistenceService,
+                new RecoveryService(null, null, null, new RuntimeStateCodec()),
+                new ReplayQueryService(null, null),
+                new TurnContextBuilder(new VisibilityService()),
+                new ModelProfileCatalogService(configRegistry, emptyModelProfileStore()),
+                () -> 123L
+        );
+
+        CreateGameRequest request = new CreateGameRequest();
+        request.setRuleSetId("avalon-classic-6p-v2");
+        request.setSetupTemplateId("classic-6p-v2");
+        request.setPlayers(List.of(
+                player(1), player(2), player(3), player(4), player(5), player(6)
+        ));
+        CreateGameRequest.LlmSelectionRequest llmSelection = new CreateGameRequest.LlmSelectionRequest();
+        llmSelection.setMode("SEAT_BINDING");
+        llmSelection.setSeatBindings(Map.of(
+                1, "model-a",
+                2, "model-a",
+                3, "model-a",
+                4, "model-a",
+                5, "model-a",
+                6, "model-a"
+        ));
+        request.setLlmSelection(llmSelection);
+
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> service.createGame(request));
+
+        assertEquals(
+                "Model profile 'model-a' is not admitted for stages [decision-stage]. Configure providerOptions.avalonRuntime in the profile.",
+                exception.getMessage()
+        );
+    }
+
     private AvalonConfigRegistry testConfigRegistry() {
         SetupTemplate template = new SetupTemplate("classic-test", 1, true, List.of("MERLIN"));
         RuleSetDefinition ruleSet = new RuleSetDefinition(
@@ -241,6 +288,10 @@ class PersistentGameApplicationServiceTest {
     }
 
     private AvalonConfigRegistry sixPlayerConfigRegistry() {
+        return sixPlayerConfigRegistryWithModel("openai", Map.of());
+    }
+
+    private AvalonConfigRegistry sixPlayerConfigRegistryWithModel(String provider, Map<String, Object> providerOptions) {
         SetupTemplate template = new SetupTemplate(
                 "classic-6p-v2",
                 6,
@@ -284,11 +335,11 @@ class PersistentGameApplicationServiceTest {
                 Map.of("model-a", new com.example.avalon.config.model.LlmModelDefinition(
                         "model-a",
                         "Model A",
-                        "openai",
+                        provider,
                         "model-a",
                         0.2,
                         256,
-                        Map.of(),
+                        providerOptions,
                         true
                 ))
         );

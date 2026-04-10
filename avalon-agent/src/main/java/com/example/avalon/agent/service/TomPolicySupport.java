@@ -65,14 +65,16 @@ final class TomPolicySupport {
         }
     }
 
-    TomTotStageResult parseTotStage(StructuredInferenceResult structuredResult, String policyId) {
+    TomTotStageResult parseTotStage(StructuredInferenceResult structuredResult,
+                                    String policyId,
+                                    int maxCandidates) {
         try {
             JsonNode payload = structuredResult.getPayload();
             TomTotStageResult totStageResult = new TomTotStageResult();
             totStageResult.setCandidates(parseTotCandidates(payload == null ? null : payload.get("candidates")));
             totStageResult.setSelectedCandidateId(textValue(payload == null ? null : payload.get("selectedCandidateId")));
             totStageResult.setSummary(textValue(payload == null ? null : payload.get("summary")));
-            sanitizeTotStage(totStageResult);
+            sanitizeTotStage(totStageResult, maxCandidates);
             return totStageResult;
         } catch (RuntimeException exception) {
             throw new IllegalStateException("Failed to parse " + policyId + " tot stage payload", exception);
@@ -289,9 +291,10 @@ final class TomPolicySupport {
         beliefStageResult.setInferredFactsToAdd(sanitizeStrings(beliefStageResult.getInferredFactsToAdd()));
     }
 
-    private void sanitizeTotStage(TomTotStageResult totStageResult) {
+    private void sanitizeTotStage(TomTotStageResult totStageResult, int maxCandidates) {
         List<TomTotCandidate> sanitizedCandidates = new ArrayList<>();
         int index = 1;
+        int candidateLimit = Math.max(1, maxCandidates);
         for (TomTotCandidate candidate : totStageResult.getCandidates()) {
             if (candidate == null) {
                 continue;
@@ -307,7 +310,7 @@ final class TomPolicySupport {
                 candidate.setExpectedUtility(clamp(candidate.getExpectedUtility()));
             }
             sanitizedCandidates.add(candidate);
-            if (sanitizedCandidates.size() == 3) {
+            if (sanitizedCandidates.size() == candidateLimit) {
                 break;
             }
             index++;

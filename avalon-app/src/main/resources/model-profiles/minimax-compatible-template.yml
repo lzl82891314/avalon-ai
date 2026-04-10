@@ -12,3 +12,26 @@ providerOptions:
   instructionRole: system
   response_format:
     type: json_object
+  avalonRuntime:
+    profileId: minimax-avalon-compact-v1
+    admissionEligible: true
+    enableReasoningSplit: true
+    promptCompressionLevel: high
+    totCandidateCount: 2
+    stageBudgets:
+      belief-stage:
+        maxTokens: 960
+        timeoutMillis: 120000
+        maxAttempts: 2
+      tot-stage:
+        maxTokens: 1120
+        timeoutMillis: 120000
+        maxAttempts: 2
+      critic-stage:
+        maxTokens: 760
+        timeoutMillis: 120000
+        maxAttempts: 2
+      decision-stage:
+        maxTokens: 640
+        timeoutMillis: 120000
+        maxAttempts: 2

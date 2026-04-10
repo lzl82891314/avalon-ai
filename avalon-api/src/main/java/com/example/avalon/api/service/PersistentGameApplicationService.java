@@ -29,6 +29,7 @@ import com.example.avalon.runtime.service.GameSessionService;
 import com.example.avalon.runtime.service.TurnContextBuilder;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -49,8 +50,35 @@ public class PersistentGameApplicationService implements GameApplicationService 
     private final ReplayQueryService replayQueryService;
     private final TurnContextBuilder turnContextBuilder;
     private final ModelProfileCatalogService modelProfileCatalogService;
+    private final ModelProfileAdmissionService modelProfileAdmissionService;
     private final SeedGenerator seedGenerator;
     private final ObjectMapper objectMapper;
+
+    @Autowired
+    public PersistentGameApplicationService(
+            AvalonConfigRegistry configRegistry,
+            GameOrchestrator gameOrchestrator,
+            GameSessionService gameSessionService,
+            RuntimePersistenceService runtimePersistenceService,
+            RecoveryService recoveryService,
+            ReplayQueryService replayQueryService,
+            TurnContextBuilder turnContextBuilder,
+            ModelProfileCatalogService modelProfileCatalogService,
+            ModelProfileAdmissionService modelProfileAdmissionService,
+            SeedGenerator seedGenerator
+    ) {
+        this.configRegistry = configRegistry;
+        this.gameOrchestrator = gameOrchestrator;
+        this.gameSessionService = gameSessionService;
+        this.runtimePersistenceService = runtimePersistenceService;
+        this.recoveryService = recoveryService;
+        this.replayQueryService = replayQueryService;
+        this.turnContextBuilder = turnContextBuilder;
+        this.modelProfileCatalogService = modelProfileCatalogService;
+        this.modelProfileAdmissionService = modelProfileAdmissionService;
+        this.seedGenerator = seedGenerator;
+        this.objectMapper = new ObjectMapper().findAndRegisterModules();
+    }
 
     public PersistentGameApplicationService(
             AvalonConfigRegistry configRegistry,
@@ -63,20 +91,23 @@ public class PersistentGameApplicationService implements GameApplicationService 
             ModelProfileCatalogService modelProfileCatalogService,
             SeedGenerator seedGenerator
     ) {
-        this.configRegistry = configRegistry;
-        this.gameOrchestrator = gameOrchestrator;
-        this.gameSessionService = gameSessionService;
-        this.runtimePersistenceService = runtimePersistenceService;
-        this.recoveryService = recoveryService;
-        this.replayQueryService = replayQueryService;
-        this.turnContextBuilder = turnContextBuilder;
-        this.modelProfileCatalogService = modelProfileCatalogService;
-        this.seedGenerator = seedGenerator;
-        this.objectMapper = new ObjectMapper().findAndRegisterModules();
+        this(
+                configRegistry,
+                gameOrchestrator,
+                gameSessionService,
+                runtimePersistenceService,
+                recoveryService,
+                replayQueryService,
+                turnContextBuilder,
+                modelProfileCatalogService,
+                new ModelProfileAdmissionService(modelProfileCatalogService, null),
+                seedGenerator
+        );
     }
 
     @Override
     public GameSummaryResponse createGame(CreateGameRequest request) {
+        modelProfileAdmissionService.validateCreateGameRequest(request);
         String gameId = "game-" + UUID.randomUUID();
         GameRuntimeState state = gameOrchestrator.createGame(toGameSetup(gameId, request));
         runtimePersistenceService.persist(state);

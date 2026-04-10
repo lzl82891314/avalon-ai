@@ -139,7 +139,7 @@ public class OpenAiChatCompletionsGateway implements ModelGateway, StructuredMod
         if (temperature != null) {
             root.put("temperature", temperature);
         }
-        int effectiveMaxTokens = OpenAiCompatibleSupport.effectiveMaxTokens(provider, maxTokens);
+        int effectiveMaxTokens = OpenAiCompatibleSupport.effectiveMaxTokens(provider, providerOptions, maxTokens);
         if (effectiveMaxTokens > 0) {
             root.put("max_completion_tokens", effectiveMaxTokens);
         }
@@ -303,7 +303,7 @@ public class OpenAiChatCompletionsGateway implements ModelGateway, StructuredMod
         String baseUrl = OpenAiCompatibleSupport.stringOption(providerOptions, "baseUrl");
         String organization = OpenAiCompatibleSupport.stringOption(providerOptions, "organization");
         String project = OpenAiCompatibleSupport.stringOption(providerOptions, "project");
-        Duration timeout = timeout(provider, providerOptions.get("timeoutMillis"));
+        Duration timeout = timeout(provider, providerOptions);
         return new RequestSettings(
                 baseUrl == null || baseUrl.isBlank() ? OpenAiCompatibleSupport.DEFAULT_BASE_URL : baseUrl,
                 apiKey,
@@ -313,8 +313,8 @@ public class OpenAiChatCompletionsGateway implements ModelGateway, StructuredMod
         );
     }
 
-    private Duration timeout(String provider, Object rawTimeoutMillis) {
-        return OpenAiCompatibleSupport.effectiveTimeout(provider, rawTimeoutMillis);
+    private Duration timeout(String provider, Map<String, Object> providerOptions) {
+        return OpenAiCompatibleSupport.effectiveTimeout(provider, providerOptions);
     }
 
     private String defaultModel(String modelName) {
@@ -401,7 +401,7 @@ public class OpenAiChatCompletionsGateway implements ModelGateway, StructuredMod
                 - 如果在 privateThought 或 auditReason.reasonSummary 中提到 candidateRoleIds，只能使用“怀疑 / 可能 / 更像 / 倾向 / 猜测”等不确定表达。
                 - 绝不能写“P5是梅林”“P3就是莫甘娜”这类确定断言。
                 """.strip());
-        if ("minimax".equals(providerId(request.getProvider()))) {
+        if (OpenAiCompatibleSupport.highCompression(request.getProvider(), request.getProviderOptions())) {
             builder.append(System.lineSeparator())
                     .append("""
                             当前 provider 的兼容要求更严格：
